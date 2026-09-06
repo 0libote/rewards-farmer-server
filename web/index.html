@@ -464,11 +464,14 @@
         }
       }
 
-      // 2. Upstream badge
+      // 2. Upstream & Browser badge
       const upstreamBadge = document.getElementById('upstream-badge');
+      const edgeVer = data.edge_version || 'Microsoft Edge';
       if (data.upstream && data.upstream.installed) {
         upstreamBadge.innerHTML = `
           <span>Upstream: <span class="text-zinc-200 font-mono">${data.upstream.commit_hash || 'latest'}</span> (${data.upstream.commit_date || ''})</span>
+          <span class="text-zinc-600">•</span>
+          <span class="text-zinc-400 font-mono text-[11px]">${edgeVer}</span>
         `;
       } else {
         upstreamBadge.textContent = 'Upstream: Initializing...';

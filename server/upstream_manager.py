@@ -9,6 +9,17 @@ UPSTREAM_REPO_URL = os.getenv(
 )
 
 
+def get_edge_version() -> str:
+    """Returns the installed Microsoft Edge browser version."""
+    for bin_name in ["microsoft-edge", "microsoft-edge-stable"]:
+        try:
+            out = subprocess.check_output([bin_name, "--version"], stderr=subprocess.DEVNULL, text=True)
+            return out.strip()
+        except Exception:
+            continue
+    return "Microsoft Edge (Stable)"
+
+
 def ensure_upstream() -> Dict[str, Any]:
     """Ensures upstream repo is cloned and symlinks/directories are configured."""
     PROFILES_DIR.mkdir(parents=True, exist_ok=True)
@@ -138,18 +149,10 @@ def generate_visual_search_image() -> Dict[str, Any]:
             text=True,
             timeout=60,
         )
-        # If output was written to UPSTREAM_DIR/visual_search.jpg and it's not symlinked yet:
-        raw_img = UPSTREAM_DIR / "visual_search.jpg"
-        if raw_img.exists() and not raw_img.is_symlink():
-            # move to data dir
-            import shutil
-            shutil.move(str(raw_img), str(VISUAL_SEARCH_IMAGE))
+        if res.returncode == 0:
             _setup_symlinks()
-
-        return {
-            "success": res.returncode == 0 and VISUAL_SEARCH_IMAGE.exists(),
-            "stdout": res.stdout,
-            "stderr": res.stderr,
-        }
+            return {"success": True, "message": "Visual search image generated successfully."}
+        else:
+            return {"success": False, "error": res.stderr}
     except Exception as e:
         return {"success": False, "error": str(e)}

@@ -158,6 +158,7 @@ def start_vnc_session(account_name: str) -> Dict[str, Any]:
             "--password-store=basic",  # Avoids DBus keyring dependency inside minimal container
             "--no-first-run",
             "--no-default-browser-check",
+            "--lang=en-US",
             "--disable-features=Translate,OptimizationHints,MediaRouter,CommandLineFlagSecurityWarnings",
             "--window-position=0,0",
             "--window-size=1280,770",

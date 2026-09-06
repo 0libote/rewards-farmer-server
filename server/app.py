@@ -23,6 +23,7 @@ from server.upstream_manager import (
     ensure_upstream,
     update_upstream,
     get_upstream_info,
+    get_edge_version,
     generate_visual_search_image,
 )
 from server.runner import (
@@ -118,6 +119,7 @@ async def get_system_status():
         "lifetime_stats": get_lifetime_stats(),
         "vnc": get_vnc_status(),
         "upstream": get_upstream_info(),
+        "edge_version": get_edge_version(),
         "scheduler": get_schedule_info(),
         "accounts": cfg.accounts,
         "account_statuses": account_statuses,
