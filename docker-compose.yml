@@ -1,0 +1,20 @@
+services:
+  rewards-farmer-server:
+    build: .
+    image: ghcr.io/0libote/rewards-farmer-server:latest
+    container_name: rewards-farmer-server
+    restart: unless-stopped
+    # Chromium requires adequate shared memory to prevent crashing on heavy web pages
+    shm_size: 2gb
+    ports:
+      - "8345:8345" # Web Dashboard
+      - "6345:6345" # Interactive Browser Login (noVNC)
+    volumes:
+      # All account profiles, settings, logs, and state persist here
+      - ./data:/app/data
+    environment:
+      - DATA_PATH=/app/data
+      - UPSTREAM_PATH=/app/upstream
+      - PORT=8345
+      - VNC_PORT=6345
+      - PYTHONUNBUFFERED=1

@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rewards Farmer Server</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#ecfdf5',
+              500: '#10b981',
+              600: '#059669',
+              700: '#047857',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Custom scrollbars */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #18181b; }
+    ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+    .terminal-font { font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', Courier, monospace; }
+  </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen flex flex-col">
+
+  <!-- TOP NAVIGATION BAR -->
+  <header class="border-b border-zinc-800 bg-zinc-900/80 backdrop-blur sticky top-0 z-30">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="bg-emerald-500/20 p-2 rounded-xl text-emerald-400 border border-emerald-500/30">
+          <i data-lucide="sprout" class="w-6 h-6"></i>
+        </div>
+        <div>
+          <div class="flex items-center space-x-2">
+            <h1 class="font-bold text-lg tracking-tight text-white">Rewards Farmer</h1>
+            <span class="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded border border-zinc-700">Docker Server</span>
+          </div>
+          <p class="text-xs text-zinc-400 flex items-center space-x-2" id="upstream-badge">
+            <span>Checking upstream...</span>
+          </p>
+        </div>
+      </div>
+
+      <div class="flex items-center space-x-3">
+        <!-- Live Run Indicator -->
+        <div id="status-pill" class="flex items-center space-x-2 px-3 py-1.5 rounded-full bg-zinc-800 border border-zinc-700 text-xs font-medium">
+          <span class="w-2.5 h-2.5 rounded-full bg-zinc-500" id="status-dot"></span>
+          <span id="status-text" class="text-zinc-300">Idle</span>
+        </div>
+
+        <!-- Run Now Button -->
+        <button id="btn-run-all" onclick="triggerRun()" class="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 active:scale-95 transition text-white px-4 py-2 rounded-lg text-sm font-semibold shadow-lg shadow-emerald-950">
+          <i data-lucide="play" class="w-4 h-4"></i>
+          <span>Run All</span>
+        </button>
+
+        <!-- Stop Button (hidden when idle) -->
+        <button id="btn-stop" onclick="triggerStop()" class="hidden items-center space-x-2 bg-rose-600 hover:bg-rose-500 active:scale-95 transition text-white px-4 py-2 rounded-lg text-sm font-semibold shadow-lg shadow-rose-950">
+          <i data-lucide="square" class="w-4 h-4"></i>
+          <span>Stop</span>
+        </button>
+
+        <!-- Config Button -->
+        <button onclick="openConfigModal()" class="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 transition" title="Configuration & Settings">
+          <i data-lucide="settings" class="w-5 h-5"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN DASHBOARD CONTENT -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+    <!-- OVERVIEW STATS & WARNINGS -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div class="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
+        <div>
+          <p class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Configured Accounts</p>
+          <p class="text-2xl font-bold text-white mt-1" id="stat-account-count">-</p>
+        </div>
+        <div class="p-3 bg-zinc-800 rounded-lg text-zinc-400">
+          <i data-lucide="users" class="w-5 h-5"></i>
+        </div>
+      </div>
+
+      <div class="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
+        <div>
+          <p class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Scheduled Daily Run</p>
+          <p class="text-sm font-semibold text-zinc-200 mt-1" id="stat-schedule">Loading...</p>
+        </div>
+        <div class="p-3 bg-zinc-800 rounded-lg text-zinc-400">
+          <i data-lucide="clock" class="w-5 h-5"></i>
+        </div>
+      </div>
+
+      <div class="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
+        <div>
+          <p class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Query Backend</p>
+          <p class="text-sm font-semibold text-emerald-400 mt-1" id="stat-query-source">-</p>
+        </div>
+        <div class="p-3 bg-zinc-800 rounded-lg text-zinc-400">
+          <i data-lucide="sparkles" class="w-5 h-5"></i>
+        </div>
+      </div>
+
+      <div class="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
+        <div>
+          <p class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Visual Search Image</p>
+          <div class="flex items-center space-x-2 mt-1">
+            <span id="stat-visual-img" class="text-sm font-semibold text-zinc-300">Checking...</span>
+            <button onclick="generateVisualImage()" class="text-xs text-emerald-400 hover:underline flex items-center space-x-1" title="Generate new random image">
+              <i data-lucide="refresh-cw" class="w-3 h-3"></i>
+              <span>Refresh</span>
+            </button>
+          </div>
+        </div>
+        <div class="p-3 bg-zinc-800 rounded-lg text-zinc-400">
+          <i data-lucide="image" class="w-5 h-5"></i>
+        </div>
+      </div>
+    </div>
+
+    <!-- ACCOUNTS LIST SECTION -->
+    <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-sm">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-base font-bold text-white">Accounts & Browser Profiles</h2>
+          <p class="text-xs text-zinc-400">Click "Interactive Login" on an account to sign in or solve 2FA directly inside your browser.</p>
+        </div>
+        <button onclick="promptAddAccount()" class="flex items-center space-x-1 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg border border-zinc-700 transition">
+          <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+          <span>Add Account</span>
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="accounts-container">
+        <!-- Rendered dynamically -->
+        <div class="text-sm text-zinc-500 py-6 text-center col-span-2">Loading account profiles...</div>
+      </div>
+    </div>
+
+    <!-- LIVE CONSOLE LOGS -->
+    <div class="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-sm flex flex-col">
+      <div class="px-4 py-3 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <i data-lucide="terminal" class="w-4 h-4 text-emerald-400"></i>
+          <span class="text-xs font-bold uppercase tracking-wider text-zinc-300">Live Execution Terminal</span>
+          <span id="ws-status" class="w-2 h-2 rounded-full bg-emerald-500" title="Connected"></span>
+        </div>
+        <div class="flex items-center space-x-3 text-xs">
+          <label class="flex items-center space-x-1 text-zinc-400 cursor-pointer">
+            <input type="checkbox" id="autoscroll-toggle" checked class="rounded bg-zinc-800 border-zinc-700 text-emerald-600 focus:ring-0">
+            <span>Auto-scroll</span>
+          </label>
+          <button onclick="clearTerminal()" class="text-zinc-400 hover:text-zinc-200">Clear</button>
+        </div>
+      </div>
+      <div id="terminal" class="terminal-font p-4 bg-zinc-950 text-zinc-300 text-xs h-72 overflow-y-auto whitespace-pre-wrap leading-relaxed select-text">
+        <span class="text-zinc-600">Waiting for logs...</span>
+      </div>
+    </div>
+
+    <!-- RUN HISTORY -->
+    <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-sm">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-base font-bold text-white">Recent Run History</h2>
+        <span class="text-xs text-zinc-500">Last 100 runs saved</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs text-zinc-300">
+          <thead class="bg-zinc-800/60 uppercase text-zinc-400 font-semibold border-b border-zinc-800">
+            <tr>
+              <th class="py-2.5 px-3">Date / Time</th>
+              <th class="py-2.5 px-3">Accounts</th>
+              <th class="py-2.5 px-3">Duration</th>
+              <th class="py-2.5 px-3">Status</th>
+              <th class="py-2.5 px-3">Search Points</th>
+            </tr>
+          </thead>
+          <tbody id="history-tbody" class="divide-y divide-zinc-800/60">
+            <tr>
+              <td colspan="5" class="py-4 text-center text-zinc-500">No runs recorded yet.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- INTERACTIVE LOGIN MODAL (VNC) -->
+  <div id="vnc-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex flex-col">
+    <div class="bg-zinc-900 border-b border-zinc-800 px-4 py-3 flex items-center justify-between shrink-0">
+      <div class="flex items-center space-x-3">
+        <div class="p-2 bg-blue-500/20 text-blue-400 rounded-lg border border-blue-500/30">
+          <i data-lucide="monitor" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <div class="flex items-center space-x-2">
+            <h3 class="font-bold text-sm text-white">Interactive Edge Session: <span id="vnc-account-name" class="text-blue-400"></span></h3>
+            <span class="bg-blue-900/60 text-blue-300 border border-blue-700/50 px-2 py-0.5 rounded text-[10px] font-semibold">Live Remote Desktop</span>
+          </div>
+          <p class="text-xs text-zinc-400">Sign in to Microsoft Rewards, approve 2FA notifications or accept consent banners, then click "Finish & Close".</p>
+        </div>
+      </div>
+      <div class="flex items-center space-x-3">
+        <button onclick="closeVncSession()" class="flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-xs font-bold transition shadow-md">
+          <i data-lucide="check" class="w-4 h-4"></i>
+          <span>Finish & Save Login</span>
+        </button>
+      </div>
+    </div>
+    <div class="flex-1 bg-zinc-950 relative overflow-hidden flex items-center justify-center">
+      <iframe id="vnc-frame" src="about:blank" class="w-full h-full border-0"></iframe>
+      <div id="vnc-loading" class="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950 space-y-3">
+        <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-emerald-500"></div>
+        <p class="text-sm text-zinc-400">Starting Edge browser inside Docker container...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONFIGURATION & SETTINGS MODAL -->
+  <div id="config-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 hidden flex items-center justify-center p-4">
+    <div class="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-2xl w-full p-6 space-y-5 shadow-2xl max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between border-b border-zinc-800 pb-4">
+        <div class="flex items-center space-x-2">
+          <i data-lucide="sliders" class="w-5 h-5 text-emerald-400"></i>
+          <h3 class="font-bold text-lg text-white">Server Configuration</h3>
+        </div>
+        <button onclick="closeConfigModal()" class="text-zinc-400 hover:text-zinc-200">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- Settings Form -->
+      <div class="space-y-4 text-xs">
+        <div>
+          <label class="block font-semibold text-zinc-300 mb-1">Search Query Backend</label>
+          <select id="cfg-query-source" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
+            <option value="trends">Google / Bing Trends & Wikipedia (zero setup, recommended)</option>
+            <option value="llm">Ollama LLM (requires Ollama instance)</option>
+          </select>
+        </div>
+
+        <div id="cfg-ollama-group">
+          <label class="block font-semibold text-zinc-300 mb-1">Ollama Host (if using LLM)</label>
+          <input type="text" id="cfg-ollama-host" placeholder="host.docker.internal:11434" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
+        </div>
+
+        <div class="border-t border-zinc-800 pt-3">
+          <label class="block font-semibold text-zinc-300 mb-1">Daily Automated Schedule (UTC)</label>
+          <div class="flex items-center space-x-4">
+            <label class="flex items-center space-x-2 text-zinc-300 cursor-pointer">
+              <input type="checkbox" id="cfg-sched-enabled" class="rounded bg-zinc-800 border-zinc-700 text-emerald-600 focus:ring-0">
+              <span>Enable Daily Cron</span>
+            </label>
+            <div class="flex items-center space-x-2">
+              <span>Time (HH:MM):</span>
+              <input type="number" id="cfg-sched-hour" min="0" max="23" value="3" class="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-center text-zinc-200">
+              <span>:</span>
+              <input type="number" id="cfg-sched-min" min="0" max="59" value="0" class="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-center text-zinc-200">
+              <span class="text-zinc-500">UTC</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="border-t border-zinc-800 pt-3">
+          <label class="block font-semibold text-zinc-300 mb-1">Webhook URL (Discord, Telegram, Gotify)</label>
+          <input type="text" id="cfg-webhook" placeholder="https://discord.com/api/webhooks/..." class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
+          <p class="text-[11px] text-zinc-500 mt-1">Receive notifications when runs start, finish, or fail.</p>
+        </div>
+
+        <div class="border-t border-zinc-800 pt-3">
+          <label class="block font-semibold text-zinc-300 mb-1">Log Level</label>
+          <select id="cfg-log-level" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
+            <option value="INFO">INFO (Standard output)</option>
+            <option value="DEBUG">DEBUG (Detailed stack traces)</option>
+          </select>
+        </div>
+
+        <!-- Upstream sync section -->
+        <div class="border-t border-zinc-800 pt-3 flex items-center justify-between">
+          <div>
+            <p class="font-semibold text-zinc-300">Upstream Bot Code</p>
+            <p class="text-zinc-500 text-[11px]">Pull the latest commits from <a href="https://github.com/User0332/rewards-farmer" target="_blank" class="text-emerald-400 hover:underline">User0332/rewards-farmer</a> without touching custom configs.</p>
+          </div>
+          <button onclick="updateUpstreamCode()" id="btn-update-upstream" class="flex items-center space-x-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg border border-zinc-700">
+            <i data-lucide="git-pull-request" class="w-3.5 h-3.5"></i>
+            <span>Pull Latest</span>
+          </button>
+        </div>
+
+        <!-- Edit Seed Words (nouns.txt) -->
+        <div class="border-t border-zinc-800 pt-3">
+          <div class="flex items-center justify-between mb-1">
+            <label class="font-semibold text-zinc-300">Seed Wordlist (nouns.txt)</label>
+            <button onclick="saveNouns()" class="text-emerald-400 hover:underline text-[11px]">Save Wordlist</button>
+          </div>
+          <textarea id="cfg-nouns-text" rows="4" class="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-2 terminal-font text-[11px] text-zinc-300 focus:outline-none focus:border-emerald-500" placeholder="One noun per line..."></textarea>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end space-x-3 border-t border-zinc-800 pt-4">
+        <button onclick="closeConfigModal()" class="px-4 py-2 text-xs rounded-lg text-zinc-400 hover:text-zinc-200">Cancel</button>
+        <button onclick="saveSettings()" class="px-5 py-2 text-xs rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // State
+    let currentStatus = null;
+    let ws = null;
+    let activeVncAccount = null;
+
+    // Initialize Lucide icons
+    lucide.createIcons();
+
+    // Fetch initial status & poll
+    async function loadStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        currentStatus = data;
+        renderStatus(data);
+      } catch (err) {
+        console.error("Failed to load status:", err);
+      }
+    }
+
+    async function loadHistory() {
+      try {
+        const res = await fetch('/api/history');
+        const history = await res.json();
+        renderHistory(history);
+      } catch (err) {
+        console.error("Failed to load history:", err);
+      }
+    }
+
+    function renderStatus(data) {
+      // 1. Runner State & Indicators
+      const isRunning = data.runner.is_running;
+      const statusDot = document.getElementById('status-dot');
+      const statusText = document.getElementById('status-text');
+      const btnRunAll = document.getElementById('btn-run-all');
+      const btnStop = document.getElementById('btn-stop');
+
+      if (isRunning) {
+        statusDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse';
+        statusText.textContent = data.runner.current_account ? `Running (${data.runner.current_account})` : 'Running';
+        btnRunAll.classList.add('hidden');
+        btnStop.classList.remove('hidden');
+        btnStop.classList.add('flex');
+      } else {
+        statusDot.className = 'w-2.5 h-2.5 rounded-full bg-zinc-500';
+        statusText.textContent = 'Idle';
+        btnRunAll.classList.remove('hidden');
+        btnStop.classList.add('hidden');
+        btnStop.classList.remove('flex');
+      }
+
+      // 2. Upstream badge
+      const upstreamBadge = document.getElementById('upstream-badge');
+      if (data.upstream && data.upstream.installed) {
+        upstreamBadge.innerHTML = `
+          <span>Upstream: <span class="text-zinc-200 font-mono">${data.upstream.commit_hash || 'latest'}</span> (${data.upstream.commit_date || ''})</span>
+        `;
+      } else {
+        upstreamBadge.textContent = 'Upstream: Initializing...';
+      }
+
+      // 3. Stats
+      document.getElementById('stat-account-count').textContent = data.accounts.length;
+      document.getElementById('stat-schedule').textContent = data.scheduler.enabled ? 
+        `Every day at ${String(data.scheduler.cron_hour).padStart(2, '0')}:${String(data.scheduler.cron_minute).padStart(2, '0')} UTC` : 'Disabled';
+      document.getElementById('stat-visual-img').textContent = data.visual_search_ready ? 'Ready (visual_search.jpg)' : 'Missing image';
+      document.getElementById('stat-visual-img').className = data.visual_search_ready ? 'text-sm font-semibold text-emerald-400' : 'text-sm font-semibold text-amber-400';
+
+      // 4. Accounts List
+      renderAccounts(data);
+    }
+
+    function renderAccounts(data) {
+      const container = document.getElementById('accounts-container');
+      const accounts = data.accounts || ['default'];
+      const runner = data.runner;
+
+      container.innerHTML = accounts.map(account => {
+        const stats = runner.stats[account] || {};
+        const tasks = stats.tasks || {};
+        const points = stats.search_points || '--/--';
+        const isCurrentRunning = runner.is_running && runner.current_account === account;
+
+        return `
+          <div class="bg-zinc-950 border ${isCurrentRunning ? 'border-emerald-500/50 ring-1 ring-emerald-500/30' : 'border-zinc-800'} rounded-xl p-4 space-y-3 transition">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center space-x-2.5">
+                <div class="w-8 h-8 rounded-lg bg-zinc-800 flex items-center justify-center text-zinc-300 font-bold uppercase text-xs">
+                  ${account.slice(0, 2)}
+                </div>
+                <div>
+                  <div class="flex items-center space-x-2">
+                    <h3 class="font-bold text-sm text-white">${account}</h3>
+                    ${isCurrentRunning ? '<span class="px-2 py-0.5 text-[10px] bg-emerald-500/20 text-emerald-400 rounded-full font-semibold animate-pulse">Running Now</span>' : ''}
+                  </div>
+                  <p class="text-[11px] text-zinc-500">Profile: data-dir/${account === 'default' ? '' : account}</p>
+                </div>
+              </div>
+
+              <!-- Action buttons -->
+              <div class="flex items-center space-x-2">
+                <button onclick="startVncSession('${account}')" class="flex items-center space-x-1 text-xs bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 px-3 py-1.5 rounded-lg transition" title="Open visual browser to login or solve 2FA">
+                  <i data-lucide="log-in" class="w-3.5 h-3.5"></i>
+                  <span>Interactive Login</span>
+                </button>
+                <button onclick="triggerRun(['${account}'])" class="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg transition" title="Run this account only">
+                  <i data-lucide="play" class="w-3.5 h-3.5"></i>
+                </button>
+                ${account !== 'default' ? `
+                  <button onclick="removeAccount('${account}')" class="p-1.5 hover:bg-rose-500/20 hover:text-rose-400 text-zinc-600 rounded-lg transition" title="Remove account">
+                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                  </button>
+                ` : ''}
+              </div>
+            </div>
+
+            <!-- Points & Task Pills -->
+            <div class="pt-2 border-t border-zinc-900 grid grid-cols-2 gap-2 text-xs">
+              <div class="bg-zinc-900/80 p-2 rounded-lg border border-zinc-800">
+                <span class="text-zinc-500 text-[10px] block uppercase font-medium">Search Points</span>
+                <span class="font-mono text-zinc-200 font-bold">${points}</span>
+              </div>
+              <div class="bg-zinc-900/80 p-2 rounded-lg border border-zinc-800 flex items-center justify-between">
+                <span class="text-zinc-500 text-[10px] block uppercase font-medium">Tasks Progress</span>
+                <div class="flex space-x-1">
+                  ${renderTaskBadges(tasks)}
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      lucide.createIcons();
+    }
+
+    function renderTaskBadges(tasks) {
+      const taskKeys = ["Bing daily set", "Explore on Bing", "Visual search", "Misc cards", "Required searches", "Bonus points"];
+      return taskKeys.map(k => {
+        const val = tasks[k];
+        let color = "bg-zinc-800 text-zinc-600";
+        if (val === "OK") color = "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40";
+        else if (val === "SKIP") color = "bg-amber-500/20 text-amber-400 border border-amber-500/40";
+        else if (val === "FAIL") color = "bg-rose-500/20 text-rose-400 border border-rose-500/40";
+        return `<span class="w-2 h-2 rounded-full ${color}" title="${k}: ${val || 'Pending'}"></span>`;
+      }).join('');
+    }
+
+    function renderHistory(history) {
+      const tbody = document.getElementById('history-tbody');
+      if (!history || history.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="py-4 text-center text-zinc-500">No runs recorded yet.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = history.slice(0, 10).map(run => {
+        const isSuccess = run.exit_code === 0;
+        const dateStr = new Date(run.start_time).toLocaleString();
+        return `
+          <tr class="hover:bg-zinc-800/30 transition">
+            <td class="py-2.5 px-3 font-mono text-zinc-400">${dateStr}</td>
+            <td class="py-2.5 px-3 font-medium text-white">${(run.accounts || []).join(', ')}</td>
+            <td class="py-2.5 px-3 text-zinc-400">${run.duration || '-'}</td>
+            <td class="py-2.5 px-3">
+              <span class="px-2 py-0.5 rounded text-[10px] font-bold ${isSuccess ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}">
+                ${isSuccess ? 'Success' : 'Error / Code ' + run.exit_code}
+              </span>
+            </td>
+            <td class="py-2.5 px-3 font-mono text-zinc-300">
+              ${Object.entries(run.stats || {}).map(([acc, st]) => `${acc}: ${st.search_points || '-'}`).join(', ') || '-'}
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    // Interactive VNC session management
+    async function startVncSession(account) {
+      activeVncAccount = account;
+      document.getElementById('vnc-account-name').textContent = account;
+      document.getElementById('vnc-modal').classList.remove('hidden');
+      document.getElementById('vnc-loading').classList.remove('hidden');
+
+      try {
+        const res = await fetch('/api/vnc/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account })
+        });
+        const data = await res.json();
+        if (!data.success) {
+          alert("Could not start VNC: " + (data.error || data.detail));
+          closeVncSession();
+          return;
+        }
+
+        // Connect iframe to noVNC
+        const host = window.location.hostname;
+        const vncPort = data.port || 6345;
+        const vncUrl = `http://${host}:${vncPort}/vnc.html?autoconnect=true&resize=scale&reconnect=true`;
+        
+        setTimeout(() => {
+          document.getElementById('vnc-frame').src = vncUrl;
+          document.getElementById('vnc-loading').classList.add('hidden');
+        }, 1200);
+
+      } catch (err) {
+        alert("Error starting VNC session: " + err);
+        closeVncSession();
+      }
+    }
+
+    async function closeVncSession() {
+      document.getElementById('vnc-frame').src = 'about:blank';
+      document.getElementById('vnc-modal').classList.add('hidden');
+      try {
+        await fetch('/api/vnc/stop', { method: 'POST' });
+      } catch (err) {
+        console.error("Error stopping VNC:", err);
+      }
+      activeVncAccount = null;
+      loadStatus();
+    }
+
+    // Run actions
+    async function triggerRun(accounts = null) {
+      try {
+        const res = await fetch('/api/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accounts })
+        });
+        const data = await res.json();
+        if (!data.success) {
+          alert("Error: " + (data.error || data.detail));
+        }
+        loadStatus();
+      } catch (err) {
+        alert("Failed to start run: " + err);
+      }
+    }
+
+    async function triggerStop() {
+      if (!confirm("Are you sure you want to stop the current run?")) return;
+      try {
+        await fetch('/api/stop', { method: 'POST' });
+        loadStatus();
+      } catch (err) {
+        alert("Failed to stop: " + err);
+      }
+    }
+
+    // Account Actions
+    async function promptAddAccount() {
+      const name = prompt("Enter account/profile name (letters, digits, dashes, e.g. 'work' or 'secondary'):");
+      if (!name) return;
+      try {
+        const res = await fetch('/api/accounts/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account: name })
+        });
+        loadStatus();
+      } catch (err) {
+        alert("Failed to add account: " + err);
+      }
+    }
+
+    async function removeAccount(name) {
+      if (!confirm(`Remove account profile '${name}' from active config?`)) return;
+      try {
+        await fetch('/api/accounts/remove', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account: name })
+        });
+        loadStatus();
+      } catch (err) {
+        alert("Failed to remove account: " + err);
+      }
+    }
+
+    // Config & Utilities
+    async function openConfigModal() {
+      try {
+        const [cfgRes, nounsRes] = await Promise.all([
+          fetch('/api/config'),
+          fetch('/api/nouns')
+        ]);
+        const cfg = await cfgRes.json();
+        const nouns = await nounsRes.json();
+
+        document.getElementById('cfg-query-source').value = cfg.query_source || 'trends';
+        document.getElementById('cfg-ollama-host').value = cfg.ollama_host || '';
+        document.getElementById('cfg-sched-enabled').checked = cfg.schedule?.enabled ?? true;
+        document.getElementById('cfg-sched-hour').value = cfg.schedule?.cron_hour ?? 3;
+        document.getElementById('cfg-sched-min').value = cfg.schedule?.cron_minute ?? 0;
+        document.getElementById('cfg-webhook').value = cfg.webhook_url || '';
+        document.getElementById('cfg-log-level').value = cfg.log_level || 'INFO';
+        document.getElementById('cfg-nouns-text').value = nouns.content || '';
+
+        document.getElementById('config-modal').classList.remove('hidden');
+      } catch (err) {
+        alert("Error loading config: " + err);
+      }
+    }
+
+    function closeConfigModal() {
+      document.getElementById('config-modal').classList.add('hidden');
+    }
+
+    async function saveSettings() {
+      const payload = {
+        accounts: currentStatus.accounts,
+        query_source: document.getElementById('cfg-query-source').value,
+        ollama_host: document.getElementById('cfg-ollama-host').value || null,
+        log_level: document.getElementById('cfg-log-level').value,
+        webhook_url: document.getElementById('cfg-webhook').value || null,
+        schedule: {
+          enabled: document.getElementById('cfg-sched-enabled').checked,
+          cron_hour: parseInt(document.getElementById('cfg-sched-hour').value) || 0,
+          cron_minute: parseInt(document.getElementById('cfg-sched-min').value) || 0,
+          run_on_startup: false
+        }
+      };
+
+      try {
+        await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        await saveNouns();
+        closeConfigModal();
+        loadStatus();
+      } catch (err) {
+        alert("Error saving settings: " + err);
+      }
+    }
+
+    async function saveNouns() {
+      const content = document.getElementById('cfg-nouns-text').value;
+      try {
+        await fetch('/api/nouns', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content })
+        });
+      } catch (err) {
+        console.error("Error saving nouns:", err);
+      }
+    }
+
+    async function updateUpstreamCode() {
+      const btn = document.getElementById('btn-update-upstream');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="animate-spin mr-1">🔄</span> Pulling...';
+      try {
+        const res = await fetch('/api/upstream/update', { method: 'POST' });
+        const data = await res.json();
+        alert(data.success ? "Upstream updated successfully!\n" + data.stdout : "Upstream update failed: " + data.error);
+        loadStatus();
+      } catch (err) {
+        alert("Error pulling upstream: " + err);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i data-lucide="git-pull-request" class="w-3.5 h-3.5"></i><span>Pull Latest</span>';
+        lucide.createIcons();
+      }
+    }
+
+    async function generateVisualImage() {
+      try {
+        const res = await fetch('/api/visual-search/generate', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          alert("Visual search image fetched from Wikimedia!");
+        } else {
+          alert("Generation failed: " + data.error);
+        }
+        loadStatus();
+      } catch (err) {
+        alert("Error generating image: " + err);
+      }
+    }
+
+    // Terminal & WebSocket Streaming
+    function connectWebSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws/logs`;
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        document.getElementById('ws-status').className = 'w-2 h-2 rounded-full bg-emerald-500';
+      };
+
+      ws.onclose = () => {
+        document.getElementById('ws-status').className = 'w-2 h-2 rounded-full bg-zinc-600';
+        setTimeout(connectWebSocket, 3000);
+      };
+
+      ws.onmessage = (event) => {
+        appendTerminalLine(event.data);
+      };
+    }
+
+    function appendTerminalLine(line) {
+      const terminal = document.getElementById('terminal');
+      if (terminal.children.length === 1 && terminal.children[0].textContent.includes('Waiting for logs')) {
+        terminal.innerHTML = '';
+      }
+
+      const div = document.createElement('div');
+      
+      // Syntax highlight tags
+      if (line.includes('[OK]')) {
+        div.className = 'text-emerald-400';
+      } else if (line.includes('[FAIL]')) {
+        div.className = 'text-rose-400 font-bold';
+      } else if (line.includes('[SKIP]')) {
+        div.className = 'text-amber-400';
+      } else if (line.includes('=== account:')) {
+        div.className = 'text-cyan-400 font-bold border-t border-b border-cyan-900/50 py-1 my-1';
+      } else if (line.includes('[REWARDS-FARMER-SERVER]')) {
+        div.className = 'text-purple-400';
+      }
+
+      div.textContent = line;
+      terminal.appendChild(div);
+
+      if (document.getElementById('autoscroll-toggle').checked) {
+        terminal.scrollTop = terminal.scrollHeight;
+      }
+    }
+
+    function clearTerminal() {
+      document.getElementById('terminal').innerHTML = '<span class="text-zinc-600">Terminal cleared.</span>';
+    }
+
+    // Poll status & init
+    setInterval(loadStatus, 4000);
+    setInterval(loadHistory, 15000);
+    loadStatus();
+    loadHistory();
+    connectWebSocket();
+  </script>
+</body>
+</html>

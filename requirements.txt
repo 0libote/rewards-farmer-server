@@ -1,0 +1,15 @@
+# Upstream dependencies
+selenium>=4.46.0,<5.0.0
+numpy
+requests
+pillow
+
+# Server & Dashboard dependencies
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+pydantic>=2.6.0
+apscheduler>=3.10.4
+aiofiles>=23.2.1
+websockets>=12.0
+python-multipart>=0.0.9
+httpx>=0.27.0
