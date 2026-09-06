@@ -1,7 +1,8 @@
 import asyncio
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from server.config import get_config
 from server.runner import start_run
@@ -40,38 +41,92 @@ def reload_schedule():
         return
 
     config = get_config()
-    job_id = "rewards_farmer_daily_run"
 
-    # Remove existing job if any
-    if scheduler.get_job(job_id):
-        scheduler.remove_job(job_id)
+    # Remove all existing farmer jobs
+    for job in list(scheduler.get_jobs()):
+        if job.id.startswith("rewards_farmer_"):
+            scheduler.remove_job(job.id)
 
-    if config.schedule.enabled:
+    if not config.schedule.enabled:
+        print("[SCHEDULER] Scheduled runs are currently disabled.")
+        return
+
+    mode = config.schedule.mode or "daily"
+
+    if mode == "interval":
+        hours = max(1, config.schedule.interval_hours)
+        scheduler.add_job(
+            _scheduled_job,
+            trigger=IntervalTrigger(hours=hours, timezone="UTC"),
+            id="rewards_farmer_interval",
+            replace_existing=True,
+        )
+        print(f"[SCHEDULER] Scheduled to run every {hours} hour(s) (UTC).")
+
+    elif mode == "custom_times":
+        times = config.schedule.custom_times or ["03:00", "15:00"]
+        added = 0
+        for idx, t_str in enumerate(times):
+            parts = t_str.strip().split(":")
+            if len(parts) == 2:
+                try:
+                    h, m = int(parts[0]), int(parts[1])
+                    job_id = f"rewards_farmer_time_{idx}"
+                    scheduler.add_job(
+                        _scheduled_job,
+                        trigger=CronTrigger(hour=h, minute=m, timezone="UTC"),
+                        id=job_id,
+                        replace_existing=True,
+                    )
+                    added += 1
+                except ValueError:
+                    pass
+        print(f"[SCHEDULER] Scheduled runs at {added} specific time(s) a day: {', '.join(times)} UTC.")
+
+    else:
+        # Default daily run
         hour = config.schedule.cron_hour
         minute = config.schedule.cron_minute
         scheduler.add_job(
             _scheduled_job,
-            trigger=CronTrigger(hour=hour, minute=minute),
-            id=job_id,
+            trigger=CronTrigger(hour=hour, minute=minute, timezone="UTC"),
+            id="rewards_farmer_daily",
             replace_existing=True,
         )
         print(f"[SCHEDULER] Scheduled daily run at {hour:02d}:{minute:02d} UTC.")
-    else:
-        print("[SCHEDULER] Scheduled runs are currently disabled.")
 
 
-def get_schedule_info():
+def get_schedule_info() -> Dict[str, Any]:
     config = get_config()
-    job_id = "rewards_farmer_daily_run"
+    sched = config.schedule
     next_run = None
-    if scheduler and scheduler.get_job(job_id):
-        next_fire = scheduler.get_job(job_id).next_run_time
-        if next_fire:
-            next_run = next_fire.isoformat()
+
+    if scheduler:
+        jobs = [j for j in scheduler.get_jobs() if j.id.startswith("rewards_farmer_")]
+        next_times = [j.next_run_time for j in jobs if j.next_run_time]
+        if next_times:
+            next_times.sort()
+            next_run = next_times[0].isoformat()
+
+    # Friendly human-readable summary
+    mode = sched.mode or "daily"
+    if not sched.enabled:
+        desc = "Disabled"
+    elif mode == "interval":
+        desc = f"Every {sched.interval_hours} hour(s)"
+    elif mode == "custom_times":
+        times_str = ", ".join(sched.custom_times or ["03:00", "15:00"])
+        desc = f"At {times_str} UTC"
+    else:
+        desc = f"Daily at {sched.cron_hour:02d}:{sched.cron_minute:02d} UTC"
 
     return {
-        "enabled": config.schedule.enabled,
-        "cron_hour": config.schedule.cron_hour,
-        "cron_minute": config.schedule.cron_minute,
+        "enabled": sched.enabled,
+        "mode": mode,
+        "interval_hours": sched.interval_hours,
+        "custom_times": sched.custom_times,
+        "cron_hour": sched.cron_hour,
+        "cron_minute": sched.cron_minute,
+        "description": desc,
         "next_run": next_run,
     }

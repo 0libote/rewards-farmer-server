@@ -66,6 +66,18 @@ def get_history() -> List[Dict[str, Any]]:
         return []
 
 
+def get_log_content(filename: str) -> Optional[str]:
+    safe_name = Path(filename).name
+    log_path = LOGS_DIR / safe_name
+    if not log_path.exists() or not log_path.is_file():
+        return None
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except Exception as e:
+        return f"Error reading log file: {e}"
+
+
 def get_lifetime_stats() -> Dict[str, Any]:
     history = get_history()
     total_runs = len(history)
@@ -80,7 +92,6 @@ def get_lifetime_stats() -> Dict[str, Any]:
         for acc, st in stats.items():
             pts = st.get("points_gained")
             if pts is None:
-                # Fallback parse from search_points string if available
                 sp = st.get("search_points")
                 if sp and "/" in sp:
                     try:
@@ -148,16 +159,51 @@ async def send_webhook(title: str, description: str, color: int = 3447003):
 def init_account_stat_entry(name: str) -> Dict[str, Any]:
     return {
         "tasks": {t: "PENDING" for t in TASK_NAMES},
+        "task_points": 0,
         "search_points": None,
         "initial_points": None,
         "current_points": None,
         "max_points": None,
+        "initial_balance": None,
+        "final_balance": None,
+        "raw_points_earned": None,
         "points_gained": 0,
         "current_step": "Initializing browser...",
         "step_index": 0,
         "total_steps": 6,
         "status": "QUEUED",
     }
+
+
+def _recalc_points(acc_entry: Dict[str, Any]):
+    """Calculate raw points earned across all tasks + searches or use raw balance diff."""
+    if acc_entry.get("raw_points_earned") is not None:
+        acc_entry["points_gained"] = acc_entry["raw_points_earned"]
+        return
+
+    # Task completions awards
+    t_pts = 0
+    tasks = acc_entry.get("tasks", {})
+    if tasks.get("Bing daily set") == "OK":
+        t_pts += 30
+    if tasks.get("Explore on Bing") == "OK":
+        t_pts += 40
+    if tasks.get("Visual search") == "OK":
+        t_pts += 5
+    if tasks.get("Misc cards") == "OK":
+        t_pts += 20
+    if tasks.get("Bonus points") == "OK":
+        t_pts += 10
+
+    # Search quota awards
+    s_pts = 0
+    init_s = acc_entry.get("initial_points")
+    curr_s = acc_entry.get("current_points")
+    if curr_s is not None and init_s is not None:
+        s_pts = max(0, curr_s - init_s)
+
+    acc_entry["task_points"] = t_pts
+    acc_entry["points_gained"] = t_pts + s_pts
 
 
 def parse_log_line(line: str):
@@ -189,6 +235,24 @@ def parse_log_line(line: str):
 
     acc_entry = state.account_stats[curr]
 
+    # Check raw balance telemetry from farm_wrapper:
+    # "[POINTS] Balance before run: 14250 pts"
+    bal_before_match = re.search(r"\[POINTS\] Balance before run:\s*(\d+)\s*pts", line)
+    if bal_before_match:
+        acc_entry["initial_balance"] = int(bal_before_match.group(1))
+
+    # "[POINTS] Balance after run: 14410 pts"
+    bal_after_match = re.search(r"\[POINTS\] Balance after run:\s*(\d+)\s*pts", line)
+    if bal_after_match:
+        acc_entry["final_balance"] = int(bal_after_match.group(1))
+
+    # "[POINTS] Raw points earned this run: +160 pts"
+    raw_pts_match = re.search(r"\[POINTS\] Raw points earned this run:\s*\+(\d+)\s*pts", line)
+    if raw_pts_match:
+        raw_val = int(raw_pts_match.group(1))
+        acc_entry["raw_points_earned"] = raw_val
+        acc_entry["points_gained"] = raw_val
+
     # Task tags: [OK], [SKIP], [FAIL]
     for tag in ["[OK]", "[SKIP]", "[FAIL]"]:
         if tag in line:
@@ -196,6 +260,7 @@ def parse_log_line(line: str):
             for task_name in TASK_NAMES:
                 if task_name.lower() in line.lower():
                     acc_entry["tasks"][task_name] = clean_tag
+            _recalc_points(acc_entry)
 
     # Step progress tracking based on completed tasks
     if "[OK] Bing daily set" in line:
@@ -219,9 +284,9 @@ def parse_log_line(line: str):
         acc_entry["initial_points"] = earned
         acc_entry["current_points"] = earned
         acc_entry["max_points"] = max_pts
-        acc_entry["points_gained"] = 0
         acc_entry["search_points"] = f"{earned}/{max_pts}"
         acc_entry["current_step"] = f"Required searches: starting at {earned}/{max_pts} pts"
+        _recalc_points(acc_entry)
 
     # Check search round progress: "Round 1: 5 searches -> 30/90"
     round_match = re.search(r"Round\s*(\d+):\s*(\d+)\s*searches\s*->\s*(\d+)/(\d+)", line)
@@ -235,9 +300,9 @@ def parse_log_line(line: str):
             acc_entry["initial_points"] = init_pts
         acc_entry["current_points"] = earned
         acc_entry["max_points"] = max_pts
-        acc_entry["points_gained"] = max(0, earned - init_pts)
         acc_entry["search_points"] = f"{earned}/{max_pts}"
         acc_entry["current_step"] = f"Searching Bing (Round {rnd}: {earned}/{max_pts} pts)"
+        _recalc_points(acc_entry)
 
     # Check quota completions
     quota_match = re.search(r"Search quota (?:complete|not filled):\s*(\d+)/(\d+)", line)
@@ -247,15 +312,17 @@ def parse_log_line(line: str):
         init_pts = acc_entry.get("initial_points") or 0
         acc_entry["current_points"] = earned
         acc_entry["max_points"] = max_pts
-        acc_entry["points_gained"] = max(0, earned - init_pts)
         acc_entry["search_points"] = f"{earned}/{max_pts}"
+        _recalc_points(acc_entry)
 
     if "[OK] Required searches" in line:
         acc_entry["current_step"] = "Claiming bonus points"
         acc_entry["step_index"] = 6
+        _recalc_points(acc_entry)
     elif "[OK] Bonus points" in line or "[SKIP] Bonus points" in line:
         acc_entry["current_step"] = "Finished"
         acc_entry["status"] = "COMPLETED"
+        _recalc_points(acc_entry)
 
 
 async def start_run(accounts: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -304,6 +371,7 @@ async def start_run(accounts: Optional[List[str]] = None) -> Dict[str, Any]:
     env["REWARDS_ACCOUNTS"] = ",".join(target_accounts)
     env["REWARDS_FARMER_LOG_LEVEL"] = config.log_level
     env["REWARDS_FARMER_LOG_FILE"] = str(log_file)
+    env["LANG"] = "en_US.UTF-8"
     if config.ollama_host:
         env["OLLAMA_HOST"] = config.ollama_host
 
@@ -316,11 +384,15 @@ async def _run_process(env: Dict[str, str], target_accounts: List[str], log_file
     await broadcast_line("[NOTE] Running in human-simulation mode (human-like mouse curves & keystroke variance to prevent bot bans). Each task takes 30-90s.")
     await send_webhook("Run Started", f"Accounts: `{', '.join(target_accounts)}`", color=3447003)
 
-    main_py = UPSTREAM_DIR / "src" / "main.py"
+    wrapper_py = Path(__file__).resolve().parent / "farm_wrapper.py"
+    target_script = str(wrapper_py) if wrapper_py.exists() else str(UPSTREAM_DIR / "src" / "main.py")
+
+    env["PYTHONPATH"] = f"{str(UPSTREAM_DIR / 'src')}:{str(Path(__file__).resolve().parent)}:{env.get('PYTHONPATH', '')}"
+
     try:
         state.process = await asyncio.create_subprocess_exec(
             "python3",
-            str(main_py),
+            target_script,
             cwd=str(UPSTREAM_DIR),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
@@ -365,7 +437,7 @@ async def _run_process(env: Dict[str, str], target_accounts: List[str], log_file
     
     # Calculate net points gained during run
     total_gained = sum(acc.get("points_gained", 0) for acc in state.account_stats.values())
-    pts_str = f" (+{total_gained} pts)" if total_gained > 0 else ""
+    pts_str = f" (+{total_gained} raw pts earned)" if total_gained > 0 else ""
 
     await broadcast_line(f"--- [REWARDS-FARMER-SERVER] Run ended: {status_str} ({duration}){pts_str} ---")
     await send_webhook(

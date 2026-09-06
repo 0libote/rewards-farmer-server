@@ -14,7 +14,10 @@ NOUNS_FILE = DATA_DIR / "nouns.txt"
 
 class ScheduleConfig(BaseModel):
     enabled: bool = True
-    cron_hour: int = 3
+    mode: str = "daily"  # "daily", "interval", "custom_times"
+    interval_hours: int = 6  # For mode == "interval"
+    custom_times: List[str] = Field(default_factory=lambda: ["03:00", "15:00"])  # For mode == "custom_times"
+    cron_hour: int = 3  # For mode == "daily"
     cron_minute: int = 0
     run_on_startup: bool = False
 
