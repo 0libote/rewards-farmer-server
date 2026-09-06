@@ -66,6 +66,41 @@ def get_history() -> List[Dict[str, Any]]:
         return []
 
 
+def get_lifetime_stats() -> Dict[str, Any]:
+    history = get_history()
+    total_runs = len(history)
+    successful_runs = sum(1 for r in history if r.get("exit_code") == 0)
+    total_points = 0
+    today_points = 0
+    today_prefix = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+    for r in history:
+        stats = r.get("stats", {})
+        is_today = (r.get("start_time") or "").startswith(today_prefix)
+        for acc, st in stats.items():
+            pts = st.get("points_gained")
+            if pts is None:
+                # Fallback parse from search_points string if available
+                sp = st.get("search_points")
+                if sp and "/" in sp:
+                    try:
+                        pts = int(sp.split("/")[0])
+                    except Exception:
+                        pts = 0
+                else:
+                    pts = 0
+            total_points += pts
+            if is_today:
+                today_points += pts
+
+    return {
+        "total_runs": total_runs,
+        "successful_runs": successful_runs,
+        "total_points_gained": total_points,
+        "today_points_gained": today_points,
+    }
+
+
 def save_history_entry(entry: Dict[str, Any]):
     history = get_history()
     history.insert(0, entry)
@@ -110,48 +145,117 @@ async def send_webhook(title: str, description: str, color: int = 3447003):
         print(f"Failed to send webhook: {e}")
 
 
+def init_account_stat_entry(name: str) -> Dict[str, Any]:
+    return {
+        "tasks": {t: "PENDING" for t in TASK_NAMES},
+        "search_points": None,
+        "initial_points": None,
+        "current_points": None,
+        "max_points": None,
+        "points_gained": 0,
+        "current_step": "Initializing browser...",
+        "step_index": 0,
+        "total_steps": 6,
+        "status": "QUEUED",
+    }
+
+
 def parse_log_line(line: str):
-    """Extract account transitions, points, and task outcomes from stdout."""
+    """Extract account transitions, points, current step and task outcomes from stdout."""
     # Check account switch: === account: <name> ===
     acc_match = re.search(r"===\s*account:\s*([^\s=]+)\s*===", line)
     if acc_match:
         account_name = acc_match.group(1).strip()
         state.current_account = account_name
         if account_name not in state.account_stats:
-            state.account_stats[account_name] = {
-                "tasks": {t: "PENDING" for t in TASK_NAMES},
-                "search_points": None,
-                "status": "RUNNING",
-            }
+            state.account_stats[account_name] = init_account_stat_entry(account_name)
+        state.account_stats[account_name]["status"] = "RUNNING"
+        state.account_stats[account_name]["current_step"] = "Bing daily set (quizzes & polls)"
+        state.account_stats[account_name]["step_index"] = 1
         return
 
     # If single account without header
     if state.current_account is None and state.accounts_in_run:
         state.current_account = state.accounts_in_run[0]
         if state.current_account not in state.account_stats:
-            state.account_stats[state.current_account] = {
-                "tasks": {t: "PENDING" for t in TASK_NAMES},
-                "search_points": None,
-                "status": "RUNNING",
-            }
+            state.account_stats[state.current_account] = init_account_stat_entry(state.current_account)
+        state.account_stats[state.current_account]["status"] = "RUNNING"
+        state.account_stats[state.current_account]["current_step"] = "Bing daily set (quizzes & polls)"
+        state.account_stats[state.current_account]["step_index"] = 1
 
     curr = state.current_account
-    if not curr:
+    if not curr or curr not in state.account_stats:
         return
 
-    # Check task tags: [OK], [SKIP], [FAIL]
+    acc_entry = state.account_stats[curr]
+
+    # Task tags: [OK], [SKIP], [FAIL]
     for tag in ["[OK]", "[SKIP]", "[FAIL]"]:
         if tag in line:
             clean_tag = tag[1:-1]
             for task_name in TASK_NAMES:
                 if task_name.lower() in line.lower():
-                    state.account_stats[curr]["tasks"][task_name] = clean_tag
+                    acc_entry["tasks"][task_name] = clean_tag
 
-    # Check search points: "Search points before: 15/90" or "quota complete: 90/90"
-    pts_match = re.search(r"(\d+)/(\d+)", line)
-    if pts_match and ("search" in line.lower() or "round" in line.lower() or "quota" in line.lower()):
-        earned, total = pts_match.groups()
-        state.account_stats[curr]["search_points"] = f"{earned}/{total}"
+    # Step progress tracking based on completed tasks
+    if "[OK] Bing daily set" in line:
+        acc_entry["current_step"] = "Explore on Bing (promotional cards)"
+        acc_entry["step_index"] = 2
+    elif "[OK] Explore on Bing" in line or "[SKIP] Explore on Bing" in line:
+        acc_entry["current_step"] = "Visual search"
+        acc_entry["step_index"] = 3
+    elif "[OK] Visual search" in line or "[SKIP] Visual search" in line:
+        acc_entry["current_step"] = "Misc cards"
+        acc_entry["step_index"] = 4
+    elif "[OK] Misc cards" in line or "[SKIP] Misc cards" in line:
+        acc_entry["current_step"] = "Required searches (measuring quota breakdown)"
+        acc_entry["step_index"] = 5
+
+    # Check search points breakdown before searches: "Search points before: 15/90"
+    sp_before = re.search(r"Search points before:\s*(\d+)/(\d+)", line)
+    if sp_before:
+        earned = int(sp_before.group(1))
+        max_pts = int(sp_before.group(2))
+        acc_entry["initial_points"] = earned
+        acc_entry["current_points"] = earned
+        acc_entry["max_points"] = max_pts
+        acc_entry["points_gained"] = 0
+        acc_entry["search_points"] = f"{earned}/{max_pts}"
+        acc_entry["current_step"] = f"Required searches: starting at {earned}/{max_pts} pts"
+
+    # Check search round progress: "Round 1: 5 searches -> 30/90"
+    round_match = re.search(r"Round\s*(\d+):\s*(\d+)\s*searches\s*->\s*(\d+)/(\d+)", line)
+    if round_match:
+        rnd = round_match.group(1)
+        earned = int(round_match.group(3))
+        max_pts = int(round_match.group(4))
+        init_pts = acc_entry.get("initial_points")
+        if init_pts is None:
+            init_pts = earned
+            acc_entry["initial_points"] = init_pts
+        acc_entry["current_points"] = earned
+        acc_entry["max_points"] = max_pts
+        acc_entry["points_gained"] = max(0, earned - init_pts)
+        acc_entry["search_points"] = f"{earned}/{max_pts}"
+        acc_entry["current_step"] = f"Searching Bing (Round {rnd}: {earned}/{max_pts} pts)"
+
+    # Check quota completions
+    quota_match = re.search(r"Search quota (?:complete|not filled):\s*(\d+)/(\d+)", line)
+    if quota_match:
+        earned = int(quota_match.group(1))
+        max_pts = int(quota_match.group(2))
+        init_pts = acc_entry.get("initial_points") or 0
+        acc_entry["current_points"] = earned
+        acc_entry["max_points"] = max_pts
+        acc_entry["points_gained"] = max(0, earned - init_pts)
+        acc_entry["search_points"] = f"{earned}/{max_pts}"
+
+    if "[OK] Required searches" in line:
+        acc_entry["current_step"] = "Claiming bonus points"
+        acc_entry["step_index"] = 6
+    elif "[OK] Bonus points" in line or "[SKIP] Bonus points" in line:
+        acc_entry["current_step"] = "Finished"
+        acc_entry["status"] = "COMPLETED"
 
 
 async def start_run(accounts: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -185,11 +289,7 @@ async def start_run(accounts: Optional[List[str]] = None) -> Dict[str, Any]:
     state.start_time = datetime.datetime.now().isoformat()
     state.accounts_in_run = target_accounts
     for acc in target_accounts:
-        state.account_stats[acc] = {
-            "tasks": {t: "PENDING" for t in TASK_NAMES},
-            "search_points": None,
-            "status": "QUEUED",
-        }
+        state.account_stats[acc] = init_account_stat_entry(acc)
 
     # Setup log file
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -199,6 +299,7 @@ async def start_run(accounts: Optional[List[str]] = None) -> Dict[str, Any]:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     env["REWARDS_HEADLESS"] = "1"
+    env["SE_AVOID_STATS"] = "true"  # Suppresses Plausible analytics warning in selenium-manager
     env["QUERY_SOURCE"] = config.query_source
     env["REWARDS_ACCOUNTS"] = ",".join(target_accounts)
     env["REWARDS_FARMER_LOG_LEVEL"] = config.log_level
@@ -212,6 +313,7 @@ async def start_run(accounts: Optional[List[str]] = None) -> Dict[str, Any]:
 
 async def _run_process(env: Dict[str, str], target_accounts: List[str], log_file: Path):
     await broadcast_line(f"--- [REWARDS-FARMER-SERVER] Starting run for: {', '.join(target_accounts)} ---")
+    await broadcast_line("[NOTE] Running in human-simulation mode (human-like mouse curves & keystroke variance to prevent bot bans). Each task takes 30-90s.")
     await send_webhook("Run Started", f"Accounts: `{', '.join(target_accounts)}`", color=3447003)
 
     main_py = UPSTREAM_DIR / "src" / "main.py"
@@ -259,11 +361,16 @@ async def _run_process(env: Dict[str, str], target_accounts: List[str], log_file
     }
     save_history_entry(summary_entry)
 
-    status_str = "Completed successfully" if returncode == 0 else f"Finished with warnings/exit code {returncode}"
-    await broadcast_line(f"--- [REWARDS-FARMER-SERVER] Run ended: {status_str} ({duration}) ---")
+    status_str = "Completed successfully" if returncode == 0 else f"Finished with exit code {returncode}"
+    
+    # Calculate net points gained during run
+    total_gained = sum(acc.get("points_gained", 0) for acc in state.account_stats.values())
+    pts_str = f" (+{total_gained} pts)" if total_gained > 0 else ""
+
+    await broadcast_line(f"--- [REWARDS-FARMER-SERVER] Run ended: {status_str} ({duration}){pts_str} ---")
     await send_webhook(
         "Run Finished",
-        f"Status: **{status_str}**\nDuration: `{duration}`\nAccounts: `{', '.join(target_accounts)}`",
+        f"Status: **{status_str}**\nDuration: `{duration}`{pts_str}\nAccounts: `{', '.join(target_accounts)}`",
         color=5763719 if returncode == 0 else 15548997,
     )
 

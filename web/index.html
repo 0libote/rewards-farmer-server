@@ -82,9 +82,9 @@
   <!-- MAIN DASHBOARD CONTENT -->
   <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
 
-    <!-- OVERVIEW STATS & REAL AUTHENTICATION STATUS -->
+    <!-- OVERVIEW STATS CARDS -->
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-      <!-- Real Login Verification Stat -->
+      <!-- 1. Real Login Verification Stat -->
       <div class="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
         <div>
           <p class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Account Sign-In</p>
@@ -96,39 +96,90 @@
         </div>
       </div>
 
+      <!-- 2. Points Farmed Stat (Live Today & All-Time) -->
       <div class="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
         <div>
-          <p class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Scheduled Daily Run</p>
+          <p class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Points Farmed</p>
+          <div class="flex items-baseline space-x-2 mt-1">
+            <p class="text-2xl font-bold text-amber-400" id="stat-points-today">+0</p>
+            <span class="text-xs font-semibold text-zinc-400">pts today</span>
+          </div>
+          <p class="text-[11px] text-zinc-500 mt-0.5" id="stat-points-lifetime">Lifetime: 0 pts</p>
+        </div>
+        <div class="p-3 bg-amber-500/10 rounded-lg text-amber-400">
+          <i data-lucide="coins" class="w-5 h-5"></i>
+        </div>
+      </div>
+
+      <!-- 3. Scheduled Daily Run -->
+      <div class="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
+        <div>
+          <p class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Daily Schedule</p>
           <p class="text-sm font-semibold text-zinc-200 mt-1" id="stat-schedule">Loading...</p>
+          <p class="text-[11px] text-zinc-500 mt-0.5">Automated UTC Cron</p>
         </div>
         <div class="p-3 bg-zinc-800 rounded-lg text-zinc-400">
           <i data-lucide="clock" class="w-5 h-5"></i>
         </div>
       </div>
 
+      <!-- 4. Query Backend & Visual Image -->
       <div class="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
         <div>
-          <p class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Query Backend</p>
-          <p class="text-sm font-semibold text-emerald-400 mt-1" id="stat-query-source">-</p>
+          <p class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Query & Visual Setup</p>
+          <p class="text-sm font-semibold text-emerald-400 mt-1" id="stat-query-source">trends backend</p>
+          <div class="flex items-center space-x-2 mt-0.5">
+            <span id="stat-visual-img" class="text-[11px] text-zinc-400">Checking image...</span>
+            <button onclick="generateVisualImage()" class="text-[10px] text-emerald-400 hover:underline" title="Refresh random Wikimedia image">↻ new</button>
+          </div>
         </div>
         <div class="p-3 bg-zinc-800 rounded-lg text-zinc-400">
           <i data-lucide="sparkles" class="w-5 h-5"></i>
         </div>
       </div>
+    </div>
 
-      <div class="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
-        <div>
-          <p class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Visual Search Image</p>
-          <div class="flex items-center space-x-2 mt-1">
-            <span id="stat-visual-img" class="text-sm font-semibold text-zinc-300">Checking...</span>
-            <button onclick="generateVisualImage()" class="text-xs text-emerald-400 hover:underline flex items-center space-x-1" title="Generate new random image">
-              <i data-lucide="refresh-cw" class="w-3 h-3"></i>
-              <span>Refresh</span>
-            </button>
+    <!-- LIVE RUN PROGRESS & TELEMETRY BANNER (Visible during execution) -->
+    <div id="live-progress-banner" class="hidden bg-gradient-to-r from-emerald-950/60 via-zinc-900 to-zinc-900 border border-emerald-500/40 rounded-xl p-5 shadow-lg space-y-3 transition">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="flex items-center space-x-3">
+          <div class="relative flex items-center justify-center">
+            <div class="w-3.5 h-3.5 rounded-full bg-emerald-400 animate-ping absolute"></div>
+            <div class="w-3.5 h-3.5 rounded-full bg-emerald-500 relative"></div>
+          </div>
+          <div>
+            <div class="flex items-center space-x-2">
+              <span class="text-xs font-bold uppercase tracking-wider text-emerald-400">Farming In Progress</span>
+              <span class="text-zinc-500">•</span>
+              <span id="live-account-name" class="font-mono font-bold text-white text-sm">default</span>
+            </div>
+            <p id="live-step-name" class="text-xs text-zinc-200 font-semibold mt-0.5">Bing daily set (quizzes & polls)...</p>
           </div>
         </div>
-        <div class="p-3 bg-zinc-800 rounded-lg text-zinc-400">
-          <i data-lucide="image" class="w-5 h-5"></i>
+
+        <!-- Live Points Badge -->
+        <div class="flex items-center space-x-3">
+          <div class="bg-zinc-950/80 border border-zinc-800 px-3 py-1.5 rounded-lg flex items-center space-x-2">
+            <i data-lucide="star" class="w-4 h-4 text-amber-400 fill-amber-400"></i>
+            <span class="text-xs text-zinc-400">Points Earned:</span>
+            <span id="live-points-val" class="font-mono text-sm font-bold text-white">-- / --</span>
+            <span id="live-points-gained" class="text-xs font-bold text-emerald-400">(+0 pts)</span>
+          </div>
+          <span id="live-elapsed-time" class="text-xs font-mono text-zinc-400 bg-zinc-800 px-2.5 py-1 rounded">00:00</span>
+        </div>
+      </div>
+
+      <!-- Step Progress Bar -->
+      <div class="space-y-1.5">
+        <div class="w-full bg-zinc-800 rounded-full h-2 overflow-hidden">
+          <div id="live-progress-bar" class="bg-emerald-500 h-2 rounded-full transition-all duration-500" style="width: 15%"></div>
+        </div>
+        <div class="flex items-center justify-between text-[11px] text-zinc-400">
+          <span class="flex items-center space-x-1.5 text-zinc-400">
+            <i data-lucide="info" class="w-3.5 h-3.5 text-zinc-500"></i>
+            <span>Human-simulation active: realistic mouse Bézier curves & typing pauses (30-90s per task) to keep accounts safe.</span>
+          </span>
+          <span id="live-step-count" class="font-mono text-zinc-300 font-semibold">Step 1 of 6</span>
         </div>
       </div>
     </div>
@@ -138,7 +189,7 @@
       <div class="flex items-center justify-between mb-4">
         <div>
           <h2 class="text-base font-bold text-white">Accounts & Profiles</h2>
-          <p class="text-xs text-zinc-400">Click <strong>"Interactive Login"</strong> to open Microsoft Edge directly in your browser to sign in and complete 2FA.</p>
+          <p class="text-xs text-zinc-400">Click <strong>"Interactive Login"</strong> to open Microsoft Edge in your browser to sign in and complete 2FA.</p>
         </div>
         <button onclick="promptAddAccount()" class="flex items-center space-x-1 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg border border-zinc-700 transition">
           <i data-lucide="plus" class="w-3.5 h-3.5"></i>
@@ -161,6 +212,7 @@
           <span id="ws-status" class="w-2 h-2 rounded-full bg-emerald-500" title="Connected"></span>
         </div>
         <div class="flex items-center space-x-3 text-xs">
+          <span class="text-[11px] text-zinc-500 hidden sm:inline">Tasks take ~1-2 min each due to human-like mouse simulation</span>
           <label class="flex items-center space-x-1 text-zinc-400 cursor-pointer">
             <input type="checkbox" id="autoscroll-toggle" checked class="rounded bg-zinc-800 border-zinc-700 text-emerald-600 focus:ring-0">
             <span>Auto-scroll</span>
@@ -187,7 +239,7 @@
               <th class="py-2.5 px-3">Accounts</th>
               <th class="py-2.5 px-3">Duration</th>
               <th class="py-2.5 px-3">Status</th>
-              <th class="py-2.5 px-3">Search Points</th>
+              <th class="py-2.5 px-3">Points Farmed</th>
             </tr>
           </thead>
           <tbody id="history-tbody" class="divide-y divide-zinc-800/60">
@@ -331,6 +383,7 @@
     let ws = null;
     let activeVncAccount = null;
     let currentVncUrl = null;
+    let runTimerInterval = null;
 
     // Initialize Lucide icons
     lucide.createIcons();
@@ -364,6 +417,7 @@
       const statusText = document.getElementById('status-text');
       const btnRunAll = document.getElementById('btn-run-all');
       const btnStop = document.getElementById('btn-stop');
+      const liveBanner = document.getElementById('live-progress-banner');
 
       if (isRunning) {
         statusDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse';
@@ -371,12 +425,43 @@
         btnRunAll.classList.add('hidden');
         btnStop.classList.remove('hidden');
         btnStop.classList.add('flex');
+        liveBanner.classList.remove('hidden');
+
+        // Update live banner
+        const currAcc = data.runner.current_account || (data.runner.accounts && data.runner.accounts[0]) || 'default';
+        const accStats = (data.runner.stats && data.runner.stats[currAcc]) || {};
+        document.getElementById('live-account-name').textContent = currAcc;
+        document.getElementById('live-step-name').textContent = accStats.current_step || 'Processing Rewards tasks...';
+        
+        const stepIdx = accStats.step_index || 1;
+        const totalSteps = accStats.total_steps || 6;
+        document.getElementById('live-step-count').textContent = `Step ${stepIdx} of ${totalSteps}`;
+        const pct = Math.max(10, Math.round((stepIdx / totalSteps) * 100));
+        document.getElementById('live-progress-bar').style.width = `${pct}%`;
+
+        // Points
+        const pts = accStats.search_points || '-- / --';
+        document.getElementById('live-points-val').textContent = pts;
+        const gained = accStats.points_gained || 0;
+        document.getElementById('live-points-gained').textContent = gained > 0 ? `(+${gained} pts)` : '(+0 pts)';
+
+        // Start elapsed timer if not running
+        if (!runTimerInterval && data.runner.start_time) {
+          updateElapsedTime(data.runner.start_time);
+          runTimerInterval = setInterval(() => updateElapsedTime(data.runner.start_time), 1000);
+        }
       } else {
         statusDot.className = 'w-2.5 h-2.5 rounded-full bg-zinc-500';
         statusText.textContent = 'Idle';
         btnRunAll.classList.remove('hidden');
         btnStop.classList.add('hidden');
         btnStop.classList.remove('flex');
+        liveBanner.classList.add('hidden');
+
+        if (runTimerInterval) {
+          clearInterval(runTimerInterval);
+          runTimerInterval = null;
+        }
       }
 
       // 2. Upstream badge
@@ -424,15 +509,35 @@
         btnRunAll.classList.remove('opacity-50', 'cursor-not-allowed');
       }
 
-      // 4. Other stats
+      // 4. Points Farmed Stats
+      if (data.lifetime_stats) {
+        const todayPts = data.lifetime_stats.today_points_gained || 0;
+        const lifePts = data.lifetime_stats.total_points_gained || 0;
+        document.getElementById('stat-points-today').textContent = `+${todayPts}`;
+        document.getElementById('stat-points-lifetime').textContent = `Lifetime: ${lifePts.toLocaleString()} pts (${data.lifetime_stats.successful_runs || 0} runs)`;
+      }
+
+      // 5. Schedule & Query Backend
       document.getElementById('stat-schedule').textContent = data.scheduler.enabled ? 
         `Every day at ${String(data.scheduler.cron_hour).padStart(2, '0')}:${String(data.scheduler.cron_minute).padStart(2, '0')} UTC` : 'Disabled';
-      document.getElementById('stat-query-source').textContent = (data.config && data.config.query_source) || 'trends';
-      document.getElementById('stat-visual-img').textContent = data.visual_search_ready ? 'Ready (visual_search.jpg)' : 'Missing image';
-      document.getElementById('stat-visual-img').className = data.visual_search_ready ? 'text-sm font-semibold text-emerald-400' : 'text-sm font-semibold text-amber-400';
+      document.getElementById('stat-query-source').textContent = `${(data.config && data.config.query_source) || 'trends'} backend`;
+      document.getElementById('stat-visual-img').textContent = data.visual_search_ready ? 'visual_search.jpg ready' : 'Missing image';
+      document.getElementById('stat-visual-img').className = data.visual_search_ready ? 'text-[11px] text-emerald-400 font-medium' : 'text-[11px] text-amber-400 font-medium';
 
-      // 5. Accounts List
+      // 6. Accounts List
       renderAccounts(data);
+    }
+
+    function updateElapsedTime(startTimeStr) {
+      if (!startTimeStr) return;
+      try {
+        const start = new Date(startTimeStr);
+        const now = new Date();
+        const diffSec = Math.max(0, Math.floor((now - start) / 1000));
+        const mins = String(Math.floor(diffSec / 60)).padStart(2, '0');
+        const secs = String(diffSec % 60).padStart(2, '0');
+        document.getElementById('live-elapsed-time').textContent = `${mins}:${secs}`;
+      } catch (e) {}
     }
 
     function renderAccounts(data) {
@@ -444,10 +549,11 @@
       container.innerHTML = accounts.map(account => {
         const stats = runner.stats[account] || {};
         const tasks = stats.tasks || {};
-        const points = stats.search_points || '--/--';
+        const points = stats.search_points || '-- / --';
         const isCurrentRunning = runner.is_running && runner.current_account === account;
         const auth = accountStatuses[account] || { logged_in: false, reason: "Checking..." };
         const isLoggedIn = auth.logged_in;
+        const gained = stats.points_gained || 0;
 
         return `
           <div class="bg-zinc-950 border ${isCurrentRunning ? 'border-emerald-500/50 ring-1 ring-emerald-500/30' : (isLoggedIn ? 'border-zinc-800' : 'border-rose-900/50')} rounded-xl p-4 space-y-3 transition">
@@ -497,14 +603,28 @@
               </div>
             ` : ''}
 
+            <!-- Live task activity if running -->
+            ${isCurrentRunning && stats.current_step ? `
+              <div class="p-2 bg-emerald-950/40 border border-emerald-500/30 rounded-lg text-xs text-emerald-300 flex items-center space-x-2">
+                <div class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></div>
+                <span class="font-medium">${stats.current_step}</span>
+              </div>
+            ` : ''}
+
             <!-- Points & Task Pills -->
             <div class="pt-2 border-t border-zinc-900 grid grid-cols-2 gap-2 text-xs">
               <div class="bg-zinc-900/80 p-2 rounded-lg border border-zinc-800">
                 <span class="text-zinc-500 text-[10px] block uppercase font-medium">Search Points</span>
-                <span class="font-mono text-zinc-200 font-bold">${points}</span>
+                <div class="flex items-baseline space-x-1.5 mt-0.5">
+                  <span class="font-mono text-zinc-200 font-bold">${points}</span>
+                  ${gained > 0 ? `<span class="text-[10px] text-emerald-400 font-semibold">(+${gained})</span>` : ''}
+                </div>
               </div>
               <div class="bg-zinc-900/80 p-2 rounded-lg border border-zinc-800 flex items-center justify-between">
-                <span class="text-zinc-500 text-[10px] block uppercase font-medium">Tasks Progress</span>
+                <div>
+                  <span class="text-zinc-500 text-[10px] block uppercase font-medium">Tasks Progress</span>
+                  <span class="text-[10px] text-zinc-400">${countCompletedTasks(tasks)} / 6 steps</span>
+                </div>
                 <div class="flex space-x-1">
                   ${renderTaskBadges(tasks)}
                 </div>
@@ -515,6 +635,10 @@
       }).join('');
 
       lucide.createIcons();
+    }
+
+    function countCompletedTasks(tasks) {
+      return Object.values(tasks).filter(v => v === 'OK' || v === 'SKIP').length;
     }
 
     function alertNotLoggedIn(account) {
@@ -529,7 +653,7 @@
         if (val === "OK") color = "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40";
         else if (val === "SKIP") color = "bg-amber-500/20 text-amber-400 border border-amber-500/40";
         else if (val === "FAIL") color = "bg-rose-500/20 text-rose-400 border border-rose-500/40";
-        return `<span class="w-2 h-2 rounded-full ${color}" title="${k}: ${val || 'Pending'}"></span>`;
+        return `<span class="w-2.5 h-2.5 rounded-full ${color}" title="${k}: ${val || 'Pending'}"></span>`;
       }).join('');
     }
 
@@ -543,6 +667,15 @@
       tbody.innerHTML = history.slice(0, 10).map(run => {
         const isSuccess = run.exit_code === 0;
         const dateStr = new Date(run.start_time).toLocaleString();
+        
+        let ptsGainedTotal = 0;
+        const statsSummaries = Object.entries(run.stats || {}).map(([acc, st]) => {
+          const pts = st.search_points || '-';
+          const gained = st.points_gained || 0;
+          ptsGainedTotal += gained;
+          return gained > 0 ? `${acc}: ${pts} (+${gained})` : `${acc}: ${pts}`;
+        }).join(', ') || '-';
+
         return `
           <tr class="hover:bg-zinc-800/30 transition">
             <td class="py-2.5 px-3 font-mono text-zinc-400">${dateStr}</td>
@@ -550,11 +683,11 @@
             <td class="py-2.5 px-3 text-zinc-400">${run.duration || '-'}</td>
             <td class="py-2.5 px-3">
               <span class="px-2 py-0.5 rounded text-[10px] font-bold ${isSuccess ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}">
-                ${isSuccess ? 'Success' : 'Error / Code ' + run.exit_code}
+                ${isSuccess ? 'Success' : 'Exit Code ' + run.exit_code}
               </span>
             </td>
             <td class="py-2.5 px-3 font-mono text-zinc-300">
-              ${Object.entries(run.stats || {}).map(([acc, st]) => `${acc}: ${st.search_points || '-'}`).join(', ') || '-'}
+              <span class="text-white font-bold">${statsSummaries}</span>
             </td>
           </tr>
         `;
@@ -826,17 +959,25 @@
 
       const div = document.createElement('div');
       
-      // Syntax highlight tags
+      // Syntax highlight tags and format friendly notes
       if (line.includes('[OK]')) {
-        div.className = 'text-emerald-400';
+        div.className = 'text-emerald-400 font-semibold';
       } else if (line.includes('[FAIL]')) {
         div.className = 'text-rose-400 font-bold';
       } else if (line.includes('[SKIP]')) {
-        div.className = 'text-amber-400';
+        div.className = 'text-cyan-300';
+        line = line + "  (Region/UI variant does not have this task - continuing normally)";
+      } else if (line.includes('is not complete after searching')) {
+        div.className = 'text-amber-300/80';
+        line = line + "  (Note: Microsoft backend delayed crediting this card)";
+      } else if (line.includes('Search points before:') || line.includes('Round ') || line.includes('Search quota complete:')) {
+        div.className = 'text-amber-300 font-bold';
       } else if (line.includes('=== account:')) {
         div.className = 'text-cyan-400 font-bold border-t border-b border-cyan-900/50 py-1 my-1';
       } else if (line.includes('[REWARDS-FARMER-SERVER]')) {
         div.className = 'text-purple-400';
+      } else if (line.includes('[NOTE]')) {
+        div.className = 'text-zinc-400 italic';
       }
 
       div.textContent = line;
@@ -852,7 +993,7 @@
     }
 
     // Poll status & init
-    setInterval(loadStatus, 4000);
+    setInterval(loadStatus, 3000);
     setInterval(loadHistory, 15000);
     loadStatus();
     loadHistory();

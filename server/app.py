@@ -30,6 +30,7 @@ from server.runner import (
     start_run,
     stop_run,
     get_history,
+    get_lifetime_stats,
     log_subscribers,
 )
 from server.scheduler import init_scheduler, reload_schedule, get_schedule_info
@@ -114,6 +115,7 @@ async def get_system_status():
             "accounts": runner_state.accounts_in_run,
             "stats": runner_state.account_stats,
         },
+        "lifetime_stats": get_lifetime_stats(),
         "vnc": get_vnc_status(),
         "upstream": get_upstream_info(),
         "scheduler": get_schedule_info(),

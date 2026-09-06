@@ -150,13 +150,15 @@ def start_vnc_session(account_name: str) -> Dict[str, Any]:
             f"--user-data-dir={str(profile_dir)}",
             "--profile-directory=Default",
             "--no-sandbox",  # MANDATORY inside Docker containers running as root!
+            "--test-type",   # Suppresses "You're using an unsupported command-line flag: --no-sandbox"
+            "--disable-infobars",
             "--disable-dev-shm-usage",
-            "--disable-gpu",  # Mandatory for virtual Xvfb displays without hardware acceleration
+            "--disable-gpu",  # Virtual Xvfb display without hardware acceleration
             "--disable-software-rasterizer",
             "--password-store=basic",  # Avoids DBus keyring dependency inside minimal container
             "--no-first-run",
             "--no-default-browser-check",
-            "--disable-features=Translate,OptimizationHints,MediaRouter",
+            "--disable-features=Translate,OptimizationHints,MediaRouter,CommandLineFlagSecurityWarnings",
             "--window-position=0,0",
             "--window-size=1280,770",
             "--start-maximized",
