@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Dict, Optional, Any
 
-from server.config import PROFILES_DIR
+from server.config import PROFILES_DIR, DATA_DIR
 from server.runner import state as runner_state
 
 DISPLAY = ":99"
@@ -73,13 +73,16 @@ def start_vnc_session(account_name: str) -> Dict[str, Any]:
     profile_dir.mkdir(parents=True, exist_ok=True)
     clean_chromium_locks(profile_dir)
 
+    logs_dir = DATA_DIR / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    edge_log_path = logs_dir / "edge_vnc.log"
+
     try:
         env = os.environ.copy()
         env["DISPLAY"] = DISPLAY
 
         # 1. Start Xvfb if not already running
         if not is_process_running(vnc_state.xvfb_proc):
-            # Kill any leftover Xvfb on display :99
             subprocess.run(["pkill", "-f", f"Xvfb {DISPLAY}"], stderr=subprocess.DEVNULL)
             vnc_state.xvfb_proc = subprocess.Popen(
                 ["Xvfb", DISPLAY, "-screen", "0", "1280x800x24"],
@@ -96,6 +99,7 @@ def start_vnc_session(account_name: str) -> Dict[str, Any]:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            time.sleep(0.5)
 
         # 3. Start x11vnc
         if not is_process_running(vnc_state.x11vnc_proc):
@@ -136,22 +140,51 @@ def start_vnc_session(account_name: str) -> Dict[str, Any]:
             )
             time.sleep(0.5)
 
-        # 5. Launch Microsoft Edge
-        vnc_state.edge_proc = subprocess.Popen(
-            [
-                "microsoft-edge",
-                f"--user-data-dir={str(profile_dir)}",
-                "--profile-directory=Default",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--start-maximized",
-                "--disable-dev-shm-usage",
-                "https://rewards.bing.com/",
-            ],
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        # 5. Launch Microsoft Edge with flags required for headless Linux Docker
+        edge_bin = "microsoft-edge"
+        if not shutil_which(edge_bin):
+            edge_bin = "microsoft-edge-stable"
+
+        edge_cmd = [
+            edge_bin,
+            f"--user-data-dir={str(profile_dir)}",
+            "--profile-directory=Default",
+            "--no-sandbox",  # MANDATORY inside Docker containers running as root!
+            "--disable-dev-shm-usage",
+            "--disable-gpu",  # Mandatory for virtual Xvfb displays without hardware acceleration
+            "--disable-software-rasterizer",
+            "--password-store=basic",  # Avoids DBus keyring dependency inside minimal container
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-features=Translate,OptimizationHints,MediaRouter",
+            "--window-position=0,0",
+            "--window-size=1280,770",
+            "--start-maximized",
+            "https://rewards.bing.com/",
+        ]
+
+        with open(edge_log_path, "w", encoding="utf-8") as edge_log_file:
+            vnc_state.edge_proc = subprocess.Popen(
+                edge_cmd,
+                env=env,
+                stdout=edge_log_file,
+                stderr=subprocess.STDOUT,
+            )
+
+        time.sleep(1.2)
+
+        # Verify Edge didn't immediately exit
+        if vnc_state.edge_proc.poll() is not None:
+            err_output = ""
+            try:
+                with open(edge_log_path, "r", encoding="utf-8") as f:
+                    err_output = f.read()[-500:]
+            except Exception:
+                pass
+            return {
+                "success": False,
+                "error": f"Microsoft Edge exited immediately (code {vnc_state.edge_proc.returncode}): {err_output.strip()}",
+            }
 
         vnc_state.active = True
         vnc_state.account = account_name
@@ -167,6 +200,11 @@ def start_vnc_session(account_name: str) -> Dict[str, Any]:
     except Exception as e:
         stop_vnc_session()
         return {"success": False, "error": f"Failed to start interactive browser: {e}"}
+
+
+def shutil_which(cmd: str) -> bool:
+    import shutil
+    return shutil.which(cmd) is not None
 
 
 def stop_vnc_session() -> Dict[str, Any]:

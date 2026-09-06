@@ -82,15 +82,17 @@
   <!-- MAIN DASHBOARD CONTENT -->
   <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
 
-    <!-- OVERVIEW STATS & WARNINGS -->
+    <!-- OVERVIEW STATS & REAL AUTHENTICATION STATUS -->
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <!-- Real Login Verification Stat -->
       <div class="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
         <div>
-          <p class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Configured Accounts</p>
-          <p class="text-2xl font-bold text-white mt-1" id="stat-account-count">-</p>
+          <p class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Account Sign-In</p>
+          <p class="text-2xl font-bold text-white mt-1" id="stat-auth-count">- / -</p>
+          <p class="text-[11px] text-zinc-500 mt-0.5" id="stat-auth-sub">Checking session...</p>
         </div>
-        <div class="p-3 bg-zinc-800 rounded-lg text-zinc-400">
-          <i data-lucide="users" class="w-5 h-5"></i>
+        <div class="p-3 bg-zinc-800 rounded-lg text-zinc-400" id="stat-auth-icon">
+          <i data-lucide="shield" class="w-5 h-5"></i>
         </div>
       </div>
 
@@ -135,8 +137,8 @@
     <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-sm">
       <div class="flex items-center justify-between mb-4">
         <div>
-          <h2 class="text-base font-bold text-white">Accounts & Browser Profiles</h2>
-          <p class="text-xs text-zinc-400">Click "Interactive Login" on an account to sign in or solve 2FA directly inside your browser.</p>
+          <h2 class="text-base font-bold text-white">Accounts & Profiles</h2>
+          <p class="text-xs text-zinc-400">Click <strong>"Interactive Login"</strong> to open Microsoft Edge directly in your browser to sign in and complete 2FA.</p>
         </div>
         <button onclick="promptAddAccount()" class="flex items-center space-x-1 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg border border-zinc-700 transition">
           <i data-lucide="plus" class="w-3.5 h-3.5"></i>
@@ -200,7 +202,7 @@
   </main>
 
   <!-- INTERACTIVE LOGIN MODAL (VNC) -->
-  <div id="vnc-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex flex-col">
+  <div id="vnc-modal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 hidden flex flex-col">
     <div class="bg-zinc-900 border-b border-zinc-800 px-4 py-3 flex items-center justify-between shrink-0">
       <div class="flex items-center space-x-3">
         <div class="p-2 bg-blue-500/20 text-blue-400 rounded-lg border border-blue-500/30">
@@ -211,10 +213,14 @@
             <h3 class="font-bold text-sm text-white">Interactive Edge Session: <span id="vnc-account-name" class="text-blue-400"></span></h3>
             <span class="bg-blue-900/60 text-blue-300 border border-blue-700/50 px-2 py-0.5 rounded text-[10px] font-semibold">Live Remote Desktop</span>
           </div>
-          <p class="text-xs text-zinc-400">Sign in to Microsoft Rewards, approve 2FA notifications or accept consent banners, then click "Finish & Close".</p>
+          <p class="text-xs text-zinc-400">Sign in with your Microsoft account, approve 2FA/authenticator prompts, and accept consent banners.</p>
         </div>
       </div>
       <div class="flex items-center space-x-3">
+        <button onclick="reloadVncFrame()" class="flex items-center space-x-1 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-2 rounded-lg border border-zinc-700 transition" title="Refresh remote display connection">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+          <span>Reload Screen</span>
+        </button>
         <button onclick="closeVncSession()" class="flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-xs font-bold transition shadow-md">
           <i data-lucide="check" class="w-4 h-4"></i>
           <span>Finish & Save Login</span>
@@ -225,7 +231,8 @@
       <iframe id="vnc-frame" src="about:blank" class="w-full h-full border-0"></iframe>
       <div id="vnc-loading" class="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950 space-y-3">
         <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-emerald-500"></div>
-        <p class="text-sm text-zinc-400">Starting Edge browser inside Docker container...</p>
+        <p class="text-sm text-zinc-400 font-medium">Launching Microsoft Edge in Docker container...</p>
+        <p class="text-xs text-zinc-600">Starting Xvfb display, window manager, and browser engine</p>
       </div>
     </div>
   </div>
@@ -323,6 +330,7 @@
     let currentStatus = null;
     let ws = null;
     let activeVncAccount = null;
+    let currentVncUrl = null;
 
     // Initialize Lucide icons
     lucide.createIcons();
@@ -381,14 +389,49 @@
         upstreamBadge.textContent = 'Upstream: Initializing...';
       }
 
-      // 3. Stats
-      document.getElementById('stat-account-count').textContent = data.accounts.length;
+      // 3. Real Authentication Status Verification
+      const loggedInCount = data.logged_in_count || 0;
+      const totalAccounts = data.total_accounts || (data.accounts ? data.accounts.length : 0);
+      const authCountEl = document.getElementById('stat-auth-count');
+      const authSubEl = document.getElementById('stat-auth-sub');
+      const authIconEl = document.getElementById('stat-auth-icon');
+
+      authCountEl.textContent = `${loggedInCount} / ${totalAccounts}`;
+
+      if (totalAccounts === 0) {
+        authCountEl.className = 'text-2xl font-bold text-zinc-500 mt-1';
+        authSubEl.textContent = 'No accounts configured';
+        authSubEl.className = 'text-[11px] text-zinc-500 mt-0.5';
+        authIconEl.className = 'p-3 bg-zinc-800 rounded-lg text-zinc-500';
+        btnRunAll.classList.add('opacity-50', 'cursor-not-allowed');
+      } else if (loggedInCount === 0) {
+        authCountEl.className = 'text-2xl font-bold text-rose-400 mt-1';
+        authSubEl.textContent = 'Sign-in required before running';
+        authSubEl.className = 'text-[11px] text-rose-400 font-medium mt-0.5';
+        authIconEl.className = 'p-3 bg-rose-500/10 rounded-lg text-rose-400';
+        btnRunAll.classList.add('opacity-50', 'cursor-not-allowed');
+      } else if (loggedInCount < totalAccounts) {
+        authCountEl.className = 'text-2xl font-bold text-amber-400 mt-1';
+        authSubEl.textContent = `${totalAccounts - loggedInCount} account(s) not signed in`;
+        authSubEl.className = 'text-[11px] text-amber-400 font-medium mt-0.5';
+        authIconEl.className = 'p-3 bg-amber-500/10 rounded-lg text-amber-400';
+        btnRunAll.classList.remove('opacity-50', 'cursor-not-allowed');
+      } else {
+        authCountEl.className = 'text-2xl font-bold text-emerald-400 mt-1';
+        authSubEl.textContent = 'All accounts ready to farm';
+        authSubEl.className = 'text-[11px] text-emerald-400 font-medium mt-0.5';
+        authIconEl.className = 'p-3 bg-emerald-500/10 rounded-lg text-emerald-400';
+        btnRunAll.classList.remove('opacity-50', 'cursor-not-allowed');
+      }
+
+      // 4. Other stats
       document.getElementById('stat-schedule').textContent = data.scheduler.enabled ? 
         `Every day at ${String(data.scheduler.cron_hour).padStart(2, '0')}:${String(data.scheduler.cron_minute).padStart(2, '0')} UTC` : 'Disabled';
+      document.getElementById('stat-query-source').textContent = (data.config && data.config.query_source) || 'trends';
       document.getElementById('stat-visual-img').textContent = data.visual_search_ready ? 'Ready (visual_search.jpg)' : 'Missing image';
       document.getElementById('stat-visual-img').className = data.visual_search_ready ? 'text-sm font-semibold text-emerald-400' : 'text-sm font-semibold text-amber-400';
 
-      // 4. Accounts List
+      // 5. Accounts List
       renderAccounts(data);
     }
 
@@ -396,36 +439,44 @@
       const container = document.getElementById('accounts-container');
       const accounts = data.accounts || ['default'];
       const runner = data.runner;
+      const accountStatuses = data.account_statuses || {};
 
       container.innerHTML = accounts.map(account => {
         const stats = runner.stats[account] || {};
         const tasks = stats.tasks || {};
         const points = stats.search_points || '--/--';
         const isCurrentRunning = runner.is_running && runner.current_account === account;
+        const auth = accountStatuses[account] || { logged_in: false, reason: "Checking..." };
+        const isLoggedIn = auth.logged_in;
 
         return `
-          <div class="bg-zinc-950 border ${isCurrentRunning ? 'border-emerald-500/50 ring-1 ring-emerald-500/30' : 'border-zinc-800'} rounded-xl p-4 space-y-3 transition">
+          <div class="bg-zinc-950 border ${isCurrentRunning ? 'border-emerald-500/50 ring-1 ring-emerald-500/30' : (isLoggedIn ? 'border-zinc-800' : 'border-rose-900/50')} rounded-xl p-4 space-y-3 transition">
             <div class="flex items-center justify-between">
               <div class="flex items-center space-x-2.5">
-                <div class="w-8 h-8 rounded-lg bg-zinc-800 flex items-center justify-center text-zinc-300 font-bold uppercase text-xs">
+                <div class="w-9 h-9 rounded-lg ${isLoggedIn ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'} flex items-center justify-center font-bold uppercase text-xs">
                   ${account.slice(0, 2)}
                 </div>
                 <div>
                   <div class="flex items-center space-x-2">
                     <h3 class="font-bold text-sm text-white">${account}</h3>
                     ${isCurrentRunning ? '<span class="px-2 py-0.5 text-[10px] bg-emerald-500/20 text-emerald-400 rounded-full font-semibold animate-pulse">Running Now</span>' : ''}
+                    ${isLoggedIn ? 
+                      `<span class="px-2 py-0.5 text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full font-semibold flex items-center space-x-1"><i data-lucide="check" class="w-2.5 h-2.5"></i><span>Logged In</span></span>` : 
+                      `<span class="px-2 py-0.5 text-[10px] bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-full font-semibold flex items-center space-x-1"><i data-lucide="alert-circle" class="w-2.5 h-2.5"></i><span>Not Logged In</span></span>`}
                   </div>
-                  <p class="text-[11px] text-zinc-500">Profile: data-dir/${account === 'default' ? '' : account}</p>
+                  <p class="text-[11px] ${isLoggedIn && auth.email ? 'text-emerald-400/90 font-mono' : 'text-zinc-500'}">
+                    ${auth.email ? auth.email : `Profile: data-dir/${account === 'default' ? '' : account}`}
+                  </p>
                 </div>
               </div>
 
               <!-- Action buttons -->
               <div class="flex items-center space-x-2">
-                <button onclick="startVncSession('${account}')" class="flex items-center space-x-1 text-xs bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 px-3 py-1.5 rounded-lg transition" title="Open visual browser to login or solve 2FA">
+                <button onclick="startVncSession('${account}')" class="flex items-center space-x-1 text-xs ${isLoggedIn ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700' : 'bg-blue-600 hover:bg-blue-500 text-white font-bold animate-pulse shadow-md shadow-blue-950'} px-3 py-1.5 rounded-lg transition" title="Open visual browser to login or solve 2FA">
                   <i data-lucide="log-in" class="w-3.5 h-3.5"></i>
-                  <span>Interactive Login</span>
+                  <span>${isLoggedIn ? 'Re-Login' : 'Interactive Login'}</span>
                 </button>
-                <button onclick="triggerRun(['${account}'])" class="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg transition" title="Run this account only">
+                <button onclick="${isLoggedIn ? `triggerRun(['${account}'])` : `alertNotLoggedIn('${account}')`}" class="p-1.5 ${isLoggedIn ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300' : 'bg-zinc-900 text-zinc-600 cursor-not-allowed'} rounded-lg transition" title="${isLoggedIn ? 'Run this account only' : 'Must log in first'}">
                   <i data-lucide="play" class="w-3.5 h-3.5"></i>
                 </button>
                 ${account !== 'default' ? `
@@ -435,6 +486,16 @@
                 ` : ''}
               </div>
             </div>
+
+            <!-- Login warning banner if unauthenticated -->
+            ${!isLoggedIn ? `
+              <div class="p-2 bg-rose-500/10 border border-rose-500/20 rounded-lg flex items-center justify-between text-xs text-rose-300">
+                <span class="flex items-center space-x-1.5">
+                  <i data-lucide="info" class="w-3.5 h-3.5 shrink-0 text-rose-400"></i>
+                  <span>${auth.reason || "Microsoft session cookies missing."} Click <strong>Interactive Login</strong>.</span>
+                </span>
+              </div>
+            ` : ''}
 
             <!-- Points & Task Pills -->
             <div class="pt-2 border-t border-zinc-900 grid grid-cols-2 gap-2 text-xs">
@@ -454,6 +515,10 @@
       }).join('');
 
       lucide.createIcons();
+    }
+
+    function alertNotLoggedIn(account) {
+      alert(`Account '${account}' is not logged in yet.\n\nPlease click 'Interactive Login' first to sign in with your Microsoft account.`);
     }
 
     function renderTaskBadges(tasks) {
@@ -502,6 +567,7 @@
       document.getElementById('vnc-account-name').textContent = account;
       document.getElementById('vnc-modal').classList.remove('hidden');
       document.getElementById('vnc-loading').classList.remove('hidden');
+      document.getElementById('vnc-frame').src = 'about:blank';
 
       try {
         const res = await fetch('/api/vnc/start', {
@@ -519,16 +585,27 @@
         // Connect iframe to noVNC
         const host = window.location.hostname;
         const vncPort = data.port || 6345;
-        const vncUrl = `http://${host}:${vncPort}/vnc.html?autoconnect=true&resize=scale&reconnect=true`;
+        currentVncUrl = `http://${host}:${vncPort}/vnc.html?autoconnect=true&resize=scale&reconnect=true`;
         
         setTimeout(() => {
-          document.getElementById('vnc-frame').src = vncUrl;
+          document.getElementById('vnc-frame').src = currentVncUrl;
           document.getElementById('vnc-loading').classList.add('hidden');
-        }, 1200);
+        }, 1500);
 
       } catch (err) {
         alert("Error starting VNC session: " + err);
         closeVncSession();
+      }
+    }
+
+    function reloadVncFrame() {
+      if (currentVncUrl) {
+        document.getElementById('vnc-loading').classList.remove('hidden');
+        document.getElementById('vnc-frame').src = 'about:blank';
+        setTimeout(() => {
+          document.getElementById('vnc-frame').src = currentVncUrl;
+          document.getElementById('vnc-loading').classList.add('hidden');
+        }, 600);
       }
     }
 
@@ -541,11 +618,26 @@
         console.error("Error stopping VNC:", err);
       }
       activeVncAccount = null;
-      loadStatus();
+      currentVncUrl = null;
+      // Refresh status immediately so auth badge updates to Logged In
+      setTimeout(loadStatus, 500);
     }
 
     // Run actions
     async function triggerRun(accounts = null) {
+      if (currentStatus) {
+        const targetAccounts = accounts || currentStatus.accounts || [];
+        const unauth = targetAccounts.filter(acc => {
+          const auth = currentStatus.account_statuses && currentStatus.account_statuses[acc];
+          return !auth || !auth.logged_in;
+        });
+
+        if (unauth.length > 0) {
+          alert(`Cannot start automation run.\n\nThe following account(s) are not signed in yet:\n- ${unauth.join('\n- ')}\n\nPlease click 'Interactive Login' on the account card to sign in with your Microsoft account first.`);
+          return;
+        }
+      }
+
       try {
         const res = await fetch('/api/run', {
           method: 'POST',

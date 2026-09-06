@@ -34,6 +34,7 @@ from server.runner import (
 )
 from server.scheduler import init_scheduler, reload_schedule, get_schedule_info
 from server.vnc_manager import start_vnc_session, stop_vnc_session, get_vnc_status
+from server.account_checker import check_account_login
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = BASE_DIR / "web"
@@ -102,6 +103,9 @@ async def serve_index():
 @app.get("/api/status")
 async def get_system_status():
     cfg = get_config()
+    account_statuses = {acc: check_account_login(acc) for acc in cfg.accounts}
+    logged_in_count = sum(1 for st in account_statuses.values() if st.get("logged_in"))
+
     return {
         "runner": {
             "is_running": runner_state.is_running,
@@ -114,6 +118,9 @@ async def get_system_status():
         "upstream": get_upstream_info(),
         "scheduler": get_schedule_info(),
         "accounts": cfg.accounts,
+        "account_statuses": account_statuses,
+        "logged_in_count": logged_in_count,
+        "total_accounts": len(cfg.accounts),
         "visual_search_ready": VISUAL_SEARCH_IMAGE.exists(),
     }
 
@@ -177,6 +184,11 @@ async def trigger_vnc_stop():
 @app.get("/api/vnc/status")
 async def fetch_vnc_status():
     return get_vnc_status()
+
+
+@app.get("/api/accounts/{account}/auth")
+async def check_single_account_auth(account: str):
+    return check_account_login(account)
 
 
 @app.get("/api/visual-search/status")

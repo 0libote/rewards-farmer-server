@@ -16,6 +16,7 @@ from server.config import (
     AppConfig,
 )
 from server.upstream_manager import ensure_upstream
+from server.account_checker import check_account_login
 
 LOGS_DIR = DATA_DIR / "logs"
 HISTORY_FILE = LOGS_DIR / "history.json"
@@ -164,6 +165,20 @@ async def start_run(accounts: Optional[List[str]] = None) -> Dict[str, Any]:
 
     config = get_config()
     target_accounts = accounts if accounts else config.accounts
+
+    if not target_accounts:
+        return {"success": False, "error": "No accounts configured to run."}
+
+    # Verify that requested accounts are logged in first
+    unauthenticated = []
+    for acc in target_accounts:
+        auth_info = check_account_login(acc)
+        if not auth_info.get("logged_in"):
+            unauthenticated.append(f"{acc} ({auth_info.get('reason', 'Sign-in required')})")
+
+    if unauthenticated:
+        err_detail = "Cannot start automation. The following account(s) are not signed in yet:\n- " + "\n- ".join(unauthenticated) + "\n\nPlease click 'Interactive Login' to sign in to Microsoft Rewards first."
+        return {"success": False, "error": err_detail}
 
     state.reset()
     state.is_running = True
