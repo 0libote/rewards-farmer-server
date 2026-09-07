@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Rewards Farmer Server</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌾</text></svg>">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
   <script>
@@ -240,11 +241,12 @@
               <th class="py-2.5 px-3">Duration</th>
               <th class="py-2.5 px-3">Status</th>
               <th class="py-2.5 px-3">Points Farmed</th>
+              <th class="py-2.5 px-3">Log</th>
             </tr>
           </thead>
           <tbody id="history-tbody" class="divide-y divide-zinc-800/60">
             <tr>
-              <td colspan="5" class="py-4 text-center text-zinc-500">No runs recorded yet.</td>
+              <td colspan="6" class="py-4 text-center text-zinc-500">No runs recorded yet.</td>
             </tr>
           </tbody>
         </table>
@@ -318,24 +320,49 @@
         </div>
 
         <div class="border-t border-zinc-800 pt-3">
-          <label class="block font-semibold text-zinc-300 mb-1">Daily Automated Schedule (UTC)</label>
-          <div class="flex items-center space-x-4">
+          <label class="block font-semibold text-zinc-300 mb-1">Automated Schedule (UTC)</label>
+          <div class="flex items-center space-x-4 flex-wrap gap-y-2">
             <label class="flex items-center space-x-2 text-zinc-300 cursor-pointer">
               <input type="checkbox" id="cfg-sched-enabled" class="rounded bg-zinc-800 border-zinc-700 text-emerald-600 focus:ring-0">
-              <span>Enable Daily Cron</span>
+              <span>Enable schedule</span>
             </label>
-            <div class="flex items-center space-x-2">
-              <span>Time (HH:MM):</span>
-              <input type="number" id="cfg-sched-hour" min="0" max="23" value="3" class="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-center text-zinc-200">
-              <span>:</span>
-              <input type="number" id="cfg-sched-min" min="0" max="59" value="0" class="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-center text-zinc-200">
-              <span class="text-zinc-500">UTC</span>
-            </div>
+            <select id="cfg-sched-mode" onchange="toggleScheduleModeFields()" class="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-zinc-200 focus:outline-none focus:border-emerald-500">
+              <option value="daily">Daily at fixed time</option>
+              <option value="interval">Every N hours</option>
+              <option value="custom_times">At specific times</option>
+            </select>
           </div>
+          <div id="cfg-sched-daily" class="flex items-center space-x-2 mt-2">
+            <span>Time (HH:MM):</span>
+            <input type="number" id="cfg-sched-hour" min="0" max="23" value="3" class="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-center text-zinc-200">
+            <span>:</span>
+            <input type="number" id="cfg-sched-min" min="0" max="59" value="0" class="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-center text-zinc-200">
+            <span class="text-zinc-500">UTC</span>
+          </div>
+          <div id="cfg-sched-interval" class="hidden items-center space-x-2 mt-2">
+            <span>Every</span>
+            <input type="number" id="cfg-sched-interval-hours" min="1" max="168" value="6" class="w-20 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-center text-zinc-200">
+            <span class="text-zinc-500">hour(s)</span>
+          </div>
+          <div id="cfg-sched-custom" class="hidden mt-2">
+            <input type="text" id="cfg-sched-custom-times" placeholder="03:00, 15:00" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-zinc-200 focus:outline-none focus:border-emerald-500">
+            <p class="text-[11px] text-zinc-500 mt-1">Comma-separated 24h times (HH:MM), UTC.</p>
+          </div>
+          <label class="flex items-center space-x-2 text-zinc-300 cursor-pointer mt-2">
+            <input type="checkbox" id="cfg-sched-startup" class="rounded bg-zinc-800 border-zinc-700 text-emerald-600 focus:ring-0">
+            <span>Run once shortly after server startup</span>
+          </label>
         </div>
 
         <div class="border-t border-zinc-800 pt-3">
-          <label class="block font-semibold text-zinc-300 mb-1">Webhook URL (Discord, Telegram, Gotify)</label>
+          <label class="flex items-center space-x-2 text-zinc-300 cursor-pointer">
+            <input type="checkbox" id="cfg-auto-update" class="rounded bg-zinc-800 border-zinc-700 text-emerald-600 focus:ring-0">
+            <span class="font-semibold">Auto-pull upstream updates on startup</span>
+          </label>
+        </div>
+
+        <div class="border-t border-zinc-800 pt-3">
+          <label class="block font-semibold text-zinc-300 mb-1">Webhook URL (Discord; generic receivers get a plain-text fallback)</label>
           <input type="text" id="cfg-webhook" placeholder="https://discord.com/api/webhooks/..." class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
           <p class="text-[11px] text-zinc-500 mt-1">Receive notifications when runs start, finish, or fail.</p>
         </div>
@@ -385,8 +412,35 @@
     let currentVncUrl = null;
     let runTimerInterval = null;
 
+    const ACCOUNT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
+    const MAX_TERMINAL_LINES = 500;
+
+    // Escape user-controlled strings before injecting into HTML or JS contexts.
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+    function escapeJsString(s) {
+      return String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
+    }
+
+    function toggleScheduleModeFields() {
+      const mode = document.getElementById('cfg-sched-mode').value;
+      document.getElementById('cfg-sched-daily').classList.toggle('hidden', mode !== 'daily');
+      document.getElementById('cfg-sched-daily').classList.toggle('flex', mode === 'daily');
+      document.getElementById('cfg-sched-interval').classList.toggle('hidden', mode !== 'interval');
+      document.getElementById('cfg-sched-interval').classList.toggle('flex', mode === 'interval');
+      document.getElementById('cfg-sched-custom').classList.toggle('hidden', mode !== 'custom_times');
+    }
+
     // Initialize Lucide icons
     lucide.createIcons();
+
+    // ESC closes the settings modal (VNC requires an explicit Finish action).
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeConfigModal();
+    });
 
     // Fetch initial status & poll
     async function loadStatus() {
@@ -521,9 +575,10 @@
       }
 
       // 5. Schedule & Query Backend
-      document.getElementById('stat-schedule').textContent = data.scheduler.enabled ? 
-        `Every day at ${String(data.scheduler.cron_hour).padStart(2, '0')}:${String(data.scheduler.cron_minute).padStart(2, '0')} UTC` : 'Disabled';
-      document.getElementById('stat-query-source').textContent = `${(data.config && data.config.query_source) || 'trends'} backend`;
+      const sched = data.scheduler || {};
+      document.getElementById('stat-schedule').textContent = sched.enabled ?
+        (sched.description || 'Scheduled') : 'Disabled';
+      document.getElementById('stat-query-source').textContent = `${data.query_source || 'trends'} backend`;
       document.getElementById('stat-visual-img').textContent = data.visual_search_ready ? 'visual_search.jpg ready' : 'Missing image';
       document.getElementById('stat-visual-img').className = data.visual_search_ready ? 'text-[11px] text-emerald-400 font-medium' : 'text-[11px] text-amber-400 font-medium';
 
@@ -557,39 +612,42 @@
         const auth = accountStatuses[account] || { logged_in: false, reason: "Checking..." };
         const isLoggedIn = auth.logged_in;
         const gained = stats.points_gained || 0;
+        const safeAccount = escapeHtml(account);
+        const jsAccount = escapeJsString(account);
+        const profilePath = `Profile: data-dir/${account === 'default' ? '' : account}`;
 
         return `
           <div class="bg-zinc-950 border ${isCurrentRunning ? 'border-emerald-500/50 ring-1 ring-emerald-500/30' : (isLoggedIn ? 'border-zinc-800' : 'border-rose-900/50')} rounded-xl p-4 space-y-3 transition">
             <div class="flex items-center justify-between">
               <div class="flex items-center space-x-2.5">
                 <div class="w-9 h-9 rounded-lg ${isLoggedIn ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'} flex items-center justify-center font-bold uppercase text-xs">
-                  ${account.slice(0, 2)}
+                  ${escapeHtml(account.slice(0, 2))}
                 </div>
                 <div>
                   <div class="flex items-center space-x-2">
-                    <h3 class="font-bold text-sm text-white">${account}</h3>
+                    <h3 class="font-bold text-sm text-white">${safeAccount}</h3>
                     ${isCurrentRunning ? '<span class="px-2 py-0.5 text-[10px] bg-emerald-500/20 text-emerald-400 rounded-full font-semibold animate-pulse">Running Now</span>' : ''}
                     ${isLoggedIn ? 
                       `<span class="px-2 py-0.5 text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full font-semibold flex items-center space-x-1"><i data-lucide="check" class="w-2.5 h-2.5"></i><span>Logged In</span></span>` : 
                       `<span class="px-2 py-0.5 text-[10px] bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-full font-semibold flex items-center space-x-1"><i data-lucide="alert-circle" class="w-2.5 h-2.5"></i><span>Not Logged In</span></span>`}
                   </div>
                   <p class="text-[11px] ${isLoggedIn && auth.email ? 'text-emerald-400/90 font-mono' : 'text-zinc-500'}">
-                    ${auth.email ? auth.email : `Profile: data-dir/${account === 'default' ? '' : account}`}
+                    ${auth.email ? escapeHtml(auth.email) : escapeHtml(profilePath)}
                   </p>
                 </div>
               </div>
 
               <!-- Action buttons -->
               <div class="flex items-center space-x-2">
-                <button onclick="startVncSession('${account}')" class="flex items-center space-x-1 text-xs ${isLoggedIn ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700' : 'bg-blue-600 hover:bg-blue-500 text-white font-bold animate-pulse shadow-md shadow-blue-950'} px-3 py-1.5 rounded-lg transition" title="Open visual browser to login or solve 2FA">
+                <button onclick="startVncSession('${jsAccount}')" class="flex items-center space-x-1 text-xs ${isLoggedIn ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700' : 'bg-blue-600 hover:bg-blue-500 text-white font-bold animate-pulse shadow-md shadow-blue-950'} px-3 py-1.5 rounded-lg transition" title="Open visual browser to login or solve 2FA">
                   <i data-lucide="log-in" class="w-3.5 h-3.5"></i>
                   <span>${isLoggedIn ? 'Re-Login' : 'Interactive Login'}</span>
                 </button>
-                <button onclick="${isLoggedIn ? `triggerRun(['${account}'])` : `alertNotLoggedIn('${account}')`}" class="p-1.5 ${isLoggedIn ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300' : 'bg-zinc-900 text-zinc-600 cursor-not-allowed'} rounded-lg transition" title="${isLoggedIn ? 'Run this account only' : 'Must log in first'}">
+                <button onclick="${isLoggedIn ? `triggerRun(['${jsAccount}'])` : `alertNotLoggedIn('${jsAccount}')`}" class="p-1.5 ${isLoggedIn ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300' : 'bg-zinc-900 text-zinc-600 cursor-not-allowed'} rounded-lg transition" title="${isLoggedIn ? 'Run this account only' : 'Must log in first'}">
                   <i data-lucide="play" class="w-3.5 h-3.5"></i>
                 </button>
                 ${account !== 'default' ? `
-                  <button onclick="removeAccount('${account}')" class="p-1.5 hover:bg-rose-500/20 hover:text-rose-400 text-zinc-600 rounded-lg transition" title="Remove account">
+                  <button onclick="removeAccount('${jsAccount}')" class="p-1.5 hover:bg-rose-500/20 hover:text-rose-400 text-zinc-600 rounded-lg transition" title="Remove account">
                     <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                   </button>
                 ` : ''}
@@ -601,7 +659,7 @@
               <div class="p-2 bg-rose-500/10 border border-rose-500/20 rounded-lg flex items-center justify-between text-xs text-rose-300">
                 <span class="flex items-center space-x-1.5">
                   <i data-lucide="info" class="w-3.5 h-3.5 shrink-0 text-rose-400"></i>
-                  <span>${auth.reason || "Microsoft session cookies missing."} Click <strong>Interactive Login</strong>.</span>
+                  <span>${escapeHtml(auth.reason || "Microsoft session cookies missing.")} Click <strong>Interactive Login</strong>.</span>
                 </span>
               </div>
             ` : ''}
@@ -663,7 +721,7 @@
     function renderHistory(history) {
       const tbody = document.getElementById('history-tbody');
       if (!history || history.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="py-4 text-center text-zinc-500">No runs recorded yet.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="py-4 text-center text-zinc-500">No runs recorded yet.</td></tr>';
         return;
       }
 
@@ -679,19 +737,25 @@
           return gained > 0 ? `${acc}: ${pts} (+${gained})` : `${acc}: ${pts}`;
         }).join(', ') || '-';
 
+        const logFile = run.log_file || '';
+        const logCell = /^[a-zA-Z0-9_.-]+$/.test(logFile)
+          ? `<a href="/api/logs/${encodeURIComponent(logFile)}" target="_blank" rel="noopener" class="text-emerald-400 hover:underline">View</a>`
+          : '<span class="text-zinc-600">-</span>';
+
         return `
           <tr class="hover:bg-zinc-800/30 transition">
-            <td class="py-2.5 px-3 font-mono text-zinc-400">${dateStr}</td>
-            <td class="py-2.5 px-3 font-medium text-white">${(run.accounts || []).join(', ')}</td>
-            <td class="py-2.5 px-3 text-zinc-400">${run.duration || '-'}</td>
+            <td class="py-2.5 px-3 font-mono text-zinc-400">${escapeHtml(dateStr)}</td>
+            <td class="py-2.5 px-3 font-medium text-white">${escapeHtml((run.accounts || []).join(', '))}</td>
+            <td class="py-2.5 px-3 text-zinc-400">${escapeHtml(run.duration || '-')}</td>
             <td class="py-2.5 px-3">
               <span class="px-2 py-0.5 rounded text-[10px] font-bold ${isSuccess ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}">
-                ${isSuccess ? 'Success' : 'Exit Code ' + run.exit_code}
+                ${isSuccess ? 'Success' : 'Exit Code ' + escapeHtml(String(run.exit_code))}
               </span>
             </td>
             <td class="py-2.5 px-3 font-mono text-zinc-300">
-              <span class="text-white font-bold">${statsSummaries}</span>
+              <span class="text-white font-bold">${escapeHtml(statsSummaries)}</span>
             </td>
+            <td class="py-2.5 px-3">${logCell}</td>
           </tr>
         `;
       }).join('');
@@ -718,10 +782,10 @@
           return;
         }
 
-        // Connect iframe to noVNC
-        const host = window.location.hostname;
+        // Connect iframe to noVNC, keeping the page's own scheme/host so the
+        // dashboard also works behind reverse proxies and non-default hosts.
         const vncPort = data.port || 6345;
-        currentVncUrl = `http://${host}:${vncPort}/vnc.html?autoconnect=true&resize=scale&reconnect=true`;
+        currentVncUrl = `${window.location.protocol}//${window.location.hostname}:${vncPort}/vnc.html?autoconnect=true&resize=scale&reconnect=true`;
         
         setTimeout(() => {
           document.getElementById('vnc-frame').src = currentVncUrl;
@@ -802,14 +866,24 @@
 
     // Account Actions
     async function promptAddAccount() {
-      const name = prompt("Enter account/profile name (letters, digits, dashes, e.g. 'work' or 'secondary'):");
+      const name = prompt("Enter account/profile name (letters, digits, dashes, underscores, max 32 chars):");
       if (!name) return;
+      const trimmed = name.trim();
+      if (!ACCOUNT_NAME_RE.test(trimmed)) {
+        alert("Invalid name. Use letters, digits, dashes or underscores only (start with a letter or digit, max 32 chars).");
+        return;
+      }
       try {
         const res = await fetch('/api/accounts/add', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ account: name })
+          body: JSON.stringify({ account: trimmed })
         });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          alert("Could not add account: " + (data.detail || res.statusText));
+          return;
+        }
         loadStatus();
       } catch (err) {
         alert("Failed to add account: " + err);
@@ -842,13 +916,20 @@
 
         document.getElementById('cfg-query-source').value = cfg.query_source || 'trends';
         document.getElementById('cfg-ollama-host').value = cfg.ollama_host || '';
-        document.getElementById('cfg-sched-enabled').checked = cfg.schedule?.enabled ?? true;
-        document.getElementById('cfg-sched-hour').value = cfg.schedule?.cron_hour ?? 3;
-        document.getElementById('cfg-sched-min').value = cfg.schedule?.cron_minute ?? 0;
+        const sched = cfg.schedule || {};
+        document.getElementById('cfg-sched-enabled').checked = sched.enabled ?? true;
+        document.getElementById('cfg-sched-mode').value = sched.mode || 'daily';
+        document.getElementById('cfg-sched-hour').value = sched.cron_hour ?? 3;
+        document.getElementById('cfg-sched-min').value = sched.cron_minute ?? 0;
+        document.getElementById('cfg-sched-interval-hours').value = sched.interval_hours ?? 6;
+        document.getElementById('cfg-sched-custom-times').value = (sched.custom_times || ['03:00', '15:00']).join(', ');
+        document.getElementById('cfg-sched-startup').checked = sched.run_on_startup ?? false;
+        document.getElementById('cfg-auto-update').checked = cfg.auto_update_upstream ?? true;
         document.getElementById('cfg-webhook').value = cfg.webhook_url || '';
         document.getElementById('cfg-log-level').value = cfg.log_level || 'INFO';
         document.getElementById('cfg-nouns-text').value = nouns.content || '';
 
+        toggleScheduleModeFields();
         document.getElementById('config-modal').classList.remove('hidden');
       } catch (err) {
         alert("Error loading config: " + err);
@@ -860,17 +941,28 @@
     }
 
     async function saveSettings() {
+      const customTimes = document.getElementById('cfg-sched-custom-times').value
+        .split(',')
+        .map(s => s.trim())
+        .filter(s => /^([01]?\d|2[0-3]):[0-5]\d$/.test(s));
+      // Preserve the full schedule object (and other server-side fields) so
+      // saving from this modal can't silently wipe modes it doesn't edit.
+      const prevSchedule = (currentStatus && currentStatus.scheduler) || {};
       const payload = {
         accounts: currentStatus.accounts,
         query_source: document.getElementById('cfg-query-source').value,
         ollama_host: document.getElementById('cfg-ollama-host').value || null,
         log_level: document.getElementById('cfg-log-level').value,
         webhook_url: document.getElementById('cfg-webhook').value || null,
+        auto_update_upstream: document.getElementById('cfg-auto-update').checked,
         schedule: {
           enabled: document.getElementById('cfg-sched-enabled').checked,
+          mode: document.getElementById('cfg-sched-mode').value,
           cron_hour: parseInt(document.getElementById('cfg-sched-hour').value) || 0,
           cron_minute: parseInt(document.getElementById('cfg-sched-min').value) || 0,
-          run_on_startup: false
+          interval_hours: parseInt(document.getElementById('cfg-sched-interval-hours').value) || prevSchedule.interval_hours || 6,
+          custom_times: customTimes.length > 0 ? customTimes : (prevSchedule.custom_times || ['03:00']),
+          run_on_startup: document.getElementById('cfg-sched-startup').checked
         }
       };
 
@@ -985,6 +1077,9 @@
 
       div.textContent = line;
       terminal.appendChild(div);
+      while (terminal.children.length > MAX_TERMINAL_LINES) {
+        terminal.removeChild(terminal.firstChild);
+      }
 
       if (document.getElementById('autoscroll-toggle').checked) {
         terminal.scrollTop = terminal.scrollHeight;
@@ -995,9 +1090,9 @@
       document.getElementById('terminal').innerHTML = '<span class="text-zinc-600">Terminal cleared.</span>';
     }
 
-    // Poll status & init
-    setInterval(loadStatus, 3000);
-    setInterval(loadHistory, 15000);
+    // Poll status & init (skip background-tab polls to reduce server load)
+    setInterval(() => { if (!document.hidden) loadStatus(); }, 3000);
+    setInterval(() => { if (!document.hidden) loadHistory(); }, 15000);
     loadStatus();
     loadHistory();
     connectWebSocket();

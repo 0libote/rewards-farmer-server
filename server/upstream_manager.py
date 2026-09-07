@@ -1,5 +1,7 @@
 import os
+import shutil
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Any
 from server.config import UPSTREAM_DIR, DATA_DIR, PROFILES_DIR, VISUAL_SEARCH_IMAGE, NOUNS_FILE
@@ -9,15 +11,17 @@ UPSTREAM_REPO_URL = os.getenv(
 )
 
 
+@lru_cache(maxsize=1)
 def get_edge_version() -> str:
-    """Returns the installed Microsoft Edge browser version."""
+    """Returns the installed Microsoft Edge browser version (cached: it can't
+    change without a container rebuild)."""
     for bin_name in ["microsoft-edge", "microsoft-edge-stable"]:
         try:
             out = subprocess.check_output([bin_name, "--version"], stderr=subprocess.DEVNULL, text=True)
             return out.strip()
         except Exception:
             continue
-    return "Microsoft Edge (Stable)"
+    return "Microsoft Edge (not detected)"
 
 
 def ensure_upstream() -> Dict[str, Any]:
@@ -92,7 +96,7 @@ def update_upstream() -> Dict[str, Any]:
 
     try:
         res = subprocess.run(
-            ["git", "-C", str(UPSTREAM_DIR), "pull"],
+            ["git", "-C", str(UPSTREAM_DIR), "pull", "--ff-only"],
             capture_output=True,
             text=True,
             timeout=30,
@@ -149,10 +153,27 @@ def generate_visual_search_image() -> Dict[str, Any]:
             text=True,
             timeout=60,
         )
-        if res.returncode == 0:
-            _setup_symlinks()
-            return {"success": True, "message": "Visual search image generated successfully."}
-        else:
-            return {"success": False, "error": res.stderr}
+        if res.returncode != 0:
+            detail = (res.stderr or res.stdout or "Unknown error").strip()
+            return {"success": False, "error": detail}
+
+        # The upstream script writes next to itself or the repo root; persist
+        # whatever it produced into the data volume so it survives restarts.
+        candidates = [
+            UPSTREAM_DIR / "visual_search.jpg",
+            UPSTREAM_DIR / "src" / "visual_search.jpg",
+        ]
+        generated = next((p for p in candidates if p.exists() and p.is_file()), None)
+        if generated is None:
+            return {"success": False, "error": "Generator ran but no visual_search.jpg was produced."}
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        if generated.resolve() != VISUAL_SEARCH_IMAGE.resolve():
+            shutil.copy2(str(generated), str(VISUAL_SEARCH_IMAGE))
+        _setup_symlinks()
+        return {
+            "success": True,
+            "message": "Visual search image generated successfully.",
+            "size_bytes": VISUAL_SEARCH_IMAGE.stat().st_size,
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}

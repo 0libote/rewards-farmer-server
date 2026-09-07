@@ -18,8 +18,18 @@ if not UPSTREAM_SRC.exists():
 if UPSTREAM_SRC.exists():
     sys.path.insert(0, str(UPSTREAM_SRC))
 
-import rewards_tasks
-import main
+try:
+    import rewards_tasks
+    import main
+except ImportError as e:
+    print(
+        f"[FARM_WRAPPER] Could not import upstream modules from {UPSTREAM_SRC}: {e}\n"
+        "[FARM_WRAPPER] The upstream repository layout may have changed; "
+        "try 'Pull Latest' or restart the container.",
+        file=sys.stderr,
+        flush=True,
+    )
+    raise
 
 
 def extract_account_balance(driver) -> int | None:
@@ -78,14 +88,17 @@ def instrumented_complete_all(self):
         original_complete_all(self)
     finally:
         try:
-            self.switch_to_earn_page()
-            time.sleep(2)
-            balance_after = extract_account_balance(self.driver)
-            if balance_after is not None:
-                print(f"[POINTS] Balance after run: {balance_after} pts", flush=True)
-                if balance_before is not None:
-                    gained = max(0, balance_after - balance_before)
-                    print(f"[POINTS] Raw points earned this run: +{gained} pts", flush=True)
+            if not hasattr(self, "switch_to_earn_page"):
+                print("[POINTS] Skipping balance-after check: upstream helper not found.", flush=True)
+            else:
+                self.switch_to_earn_page()
+                time.sleep(2)
+                balance_after = extract_account_balance(self.driver)
+                if balance_after is not None:
+                    print(f"[POINTS] Balance after run: {balance_after} pts", flush=True)
+                    if balance_before is not None:
+                        gained = max(0, balance_after - balance_before)
+                        print(f"[POINTS] Raw points earned this run: +{gained} pts", flush=True)
         except Exception:
             pass
 

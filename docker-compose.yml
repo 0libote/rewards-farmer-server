@@ -8,6 +8,9 @@ services:
     shm_size: 2gb
     ports:
       - "8345:8345" # Web Dashboard
+      # NOTE: the interactive login stream (noVNC) has no password. On remote
+      # servers prefer binding to localhost ("127.0.0.1:6345:6345") and reaching
+      # it via an SSH tunnel or authenticated reverse proxy.
       - "6345:6345" # Interactive Browser Login (noVNC)
     volumes:
       # All account profiles, settings, logs, and state persist here
@@ -18,3 +21,14 @@ services:
       - PORT=8345
       - VNC_PORT=6345
       - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8345/api/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

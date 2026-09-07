@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -7,7 +8,7 @@ from typing import List, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -18,6 +19,8 @@ from server.config import (
     VISUAL_SEARCH_IMAGE,
     NOUNS_FILE,
     PROFILES_DIR,
+    MAX_ACCOUNTS,
+    is_valid_account_name,
 )
 from server.upstream_manager import (
     ensure_upstream,
@@ -32,14 +35,19 @@ from server.runner import (
     stop_run,
     get_history,
     get_lifetime_stats,
+    is_safe_log_filename,
     log_subscribers,
+    LOGS_DIR,
 )
-from server.scheduler import init_scheduler, reload_schedule, get_schedule_info
+from server.scheduler import init_scheduler, reload_schedule, get_schedule_info, shutdown_scheduler
 from server.vnc_manager import start_vnc_session, stop_vnc_session, get_vnc_status
 from server.account_checker import check_account_login
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = BASE_DIR / "web"
+
+MAX_VISUAL_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_NOUNS_BYTES = 200 * 1024
 
 
 @asynccontextmanager
@@ -58,6 +66,7 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     print("[SERVER] Shutting down Rewards Farmer Server...")
+    shutdown_scheduler()
     stop_vnc_session()
     await stop_run()
 
@@ -67,7 +76,7 @@ app = FastAPI(title="Rewards Farmer Server", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -105,7 +114,9 @@ async def serve_index():
 @app.get("/api/status")
 async def get_system_status():
     cfg = get_config()
-    account_statuses = {acc: check_account_login(acc) for acc in cfg.accounts}
+    # Cookie inspection does blocking sqlite/file I/O: keep it off the event loop.
+    checks = await asyncio.gather(*(asyncio.to_thread(check_account_login, acc) for acc in cfg.accounts))
+    account_statuses = dict(zip(cfg.accounts, checks))
     logged_in_count = sum(1 for st in account_statuses.values() if st.get("logged_in"))
 
     return {
@@ -116,21 +127,40 @@ async def get_system_status():
             "accounts": runner_state.accounts_in_run,
             "stats": runner_state.account_stats,
         },
-        "lifetime_stats": get_lifetime_stats(),
+        "lifetime_stats": await asyncio.to_thread(get_lifetime_stats),
         "vnc": get_vnc_status(),
-        "upstream": get_upstream_info(),
-        "edge_version": get_edge_version(),
+        "upstream": await asyncio.to_thread(get_upstream_info),
+        "edge_version": await asyncio.to_thread(get_edge_version),
         "scheduler": get_schedule_info(),
         "accounts": cfg.accounts,
         "account_statuses": account_statuses,
         "logged_in_count": logged_in_count,
         "total_accounts": len(cfg.accounts),
+        "query_source": cfg.query_source,
+        "webhook_configured": bool(cfg.webhook_url),
         "visual_search_ready": VISUAL_SEARCH_IMAGE.exists(),
+    }
+
+
+@app.get("/api/health")
+@app.get("/health")
+async def health_check():
+    cfg = get_config()
+    return {
+        "status": "ok",
+        "runner_active": runner_state.is_running,
+        "accounts": len(cfg.accounts),
+        "upstream": get_upstream_info().get("installed", False),
     }
 
 
 @app.post("/api/run")
 async def trigger_run(req: RunRequest = RunRequest()):
+    if req.accounts:
+        invalid = [a for a in req.accounts if not is_valid_account_name(a.strip())]
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"Invalid account name(s): {', '.join(invalid)}")
+        req.accounts = [a.strip() for a in req.accounts]
     result = await start_run(accounts=req.accounts)
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error"))
@@ -147,7 +177,19 @@ async def trigger_stop():
 
 @app.get("/api/history")
 async def fetch_history():
-    return get_history()
+    return await asyncio.to_thread(get_history)
+
+
+@app.get("/api/logs/{filename}")
+async def fetch_log_file(filename: str):
+    """Serve a single persisted run log. The filename is strictly validated
+    (run_YYYYMMDD_HHMMSS.log) so callers can't escape the logs directory."""
+    if not is_safe_log_filename(filename):
+        raise HTTPException(status_code=404, detail="Log file not found")
+    log_path = LOGS_DIR / filename
+    if not log_path.is_file():
+        raise HTTPException(status_code=404, detail="Log file not found")
+    return FileResponse(str(log_path), media_type="text/plain; charset=utf-8")
 
 
 @app.get("/api/config")
@@ -174,7 +216,9 @@ async def trigger_upstream_update():
 
 @app.post("/api/vnc/start")
 async def trigger_vnc_start(req: VncStartRequest):
-    result = start_vnc_session(req.account)
+    if not is_valid_account_name(req.account.strip()):
+        raise HTTPException(status_code=400, detail="Invalid account name")
+    result = await asyncio.to_thread(start_vnc_session, req.account.strip())
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error"))
     return result
@@ -182,7 +226,7 @@ async def trigger_vnc_start(req: VncStartRequest):
 
 @app.post("/api/vnc/stop")
 async def trigger_vnc_stop():
-    return stop_vnc_session()
+    return await asyncio.to_thread(stop_vnc_session)
 
 
 @app.get("/api/vnc/status")
@@ -216,9 +260,23 @@ async def generate_visual_image():
 async def upload_visual_image(file: UploadFile = File(...)):
     try:
         content = await file.read()
+        if len(content) > MAX_VISUAL_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Image too large (max 10 MB)")
+        if file.content_type and not file.content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail=f"Expected an image upload, got {file.content_type}")
+        # Verify the bytes actually decode as an image before persisting.
+        try:
+            from PIL import Image
+
+            with Image.open(BytesIO(content)) as img:
+                img.verify()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Uploaded file is not a valid image")
         with open(VISUAL_SEARCH_IMAGE, "wb") as f:
             f.write(content)
         return {"success": True, "size": len(content)}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -233,6 +291,9 @@ async def get_nouns():
 
 @app.post("/api/nouns")
 async def update_nouns(req: NounsUpdateRequest):
+    if len(req.content) > MAX_NOUNS_BYTES:
+        raise HTTPException(status_code=413, detail="Wordlist too large (max 200 KB)")
+    NOUNS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(NOUNS_FILE, "w", encoding="utf-8") as f:
         f.write(req.content)
     return {"success": True}
@@ -241,11 +302,16 @@ async def update_nouns(req: NounsUpdateRequest):
 @app.post("/api/accounts/add")
 async def add_account(req: AccountActionRequest):
     name = req.account.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Account name cannot be empty")
+    if not is_valid_account_name(name):
+        raise HTTPException(
+            status_code=400,
+            detail="Account name must start with a letter or digit and contain only letters, digits, dashes or underscores (max 32 chars)",
+        )
     cfg = get_config()
     if name in cfg.accounts:
         return {"success": True, "message": "Account already exists"}
+    if len(cfg.accounts) >= MAX_ACCOUNTS:
+        raise HTTPException(status_code=400, detail=f"Account limit reached ({MAX_ACCOUNTS})")
     cfg.accounts.append(name)
     save_config(cfg)
     return {"success": True, "accounts": cfg.accounts}
@@ -254,6 +320,8 @@ async def add_account(req: AccountActionRequest):
 @app.post("/api/accounts/remove")
 async def remove_account(req: AccountActionRequest):
     name = req.account.strip()
+    if not is_valid_account_name(name):
+        raise HTTPException(status_code=400, detail="Invalid account name")
     cfg = get_config()
     if name not in cfg.accounts:
         return {"success": True, "message": "Account does not exist"}
@@ -278,6 +346,9 @@ async def websocket_logs(websocket: WebSocket):
             line = await queue.get()
             await websocket.send_text(line)
     except WebSocketDisconnect:
+        pass
+    except RuntimeError:
+        # Client went away mid-send.
         pass
     finally:
         if queue in log_subscribers:
