@@ -422,8 +422,8 @@
       }[c]));
     }
     function escapeJsString(s) {
-      const BS = String.fromCharCode(92); // backslash, kept out of literals
-      const NL = String.fromCharCode(10); // newline, kept out of literals
+      const BS = String.fromCodePoint(92); // backslash, kept out of literals
+      const NL = String.fromCodePoint(10); // newline, kept out of literals
       return String(s ?? '')
         .replaceAll(BS, BS + BS)
         .replaceAll("'", BS + "'")
