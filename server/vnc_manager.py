@@ -1,12 +1,12 @@
-import asyncio
 import os
-import signal
+import shutil
 import subprocess
 import time
 from pathlib import Path
 from typing import Dict, Optional, Any
 
-from server.config import PROFILES_DIR, DATA_DIR
+from server.account_checker import get_profile_dir
+from server.config import DATA_DIR, is_valid_account_name
 from server.runner import state as runner_state
 
 DISPLAY = ":99"
@@ -29,12 +29,6 @@ class VncSessionState:
 vnc_state = VncSessionState()
 
 
-def get_profile_dir(account_name: str) -> Path:
-    if account_name == "default":
-        return PROFILES_DIR.resolve()
-    return (PROFILES_DIR / account_name).resolve()
-
-
 def clean_chromium_locks(profile_dir: Path):
     """Remove stale SingletonLock if Edge crashed previously."""
     for lock_name in ["SingletonLock", "SingletonCookie", "SingletonSocket"]:
@@ -52,7 +46,15 @@ def is_process_running(proc: Optional[subprocess.Popen]) -> bool:
 
 
 def start_vnc_session(account_name: str) -> Dict[str, Any]:
-    """Starts an interactive browser session inside Xvfb + noVNC for logging in."""
+    """Starts an interactive browser session inside Xvfb + noVNC for logging in.
+
+    NOTE: the VNC stream has no password (x11vnc -nopw). Do not expose
+    VNC_PORT to the public internet; bind it to localhost and use an SSH
+    tunnel or authenticated reverse proxy instead.
+    """
+    if not is_valid_account_name(account_name):
+        return {"success": False, "error": f"Invalid account name: {account_name!r}"}
+
     if runner_state.is_running:
         return {
             "success": False,
@@ -154,7 +156,8 @@ def start_vnc_session(account_name: str) -> Dict[str, Any]:
             "--disable-infobars",
             "--disable-dev-shm-usage",
             "--disable-gpu",  # Virtual Xvfb display without hardware acceleration
-            "--disable-software-rasterizer",
+            # NOTE: software rasterizer stays enabled so pages actually paint
+            # under Xvfb (disabling it is a classic cause of black screens).
             "--password-store=basic",  # Avoids DBus keyring dependency inside minimal container
             "--no-first-run",
             "--no-default-browser-check",
@@ -206,7 +209,6 @@ def start_vnc_session(account_name: str) -> Dict[str, Any]:
 
 
 def shutil_which(cmd: str) -> bool:
-    import shutil
     return shutil.which(cmd) is not None
 
 

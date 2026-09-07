@@ -4,18 +4,25 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from server.config import get_config
+from server.config import TIME_RE, get_config
 from server.runner import start_run
 
 scheduler: Optional[BackgroundScheduler] = None
 event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
+async def _run_scheduled():
+    """Scheduler entrypoint: skips quietly if a run is already active."""
+    result = await start_run()
+    if not result.get("success"):
+        print(f"[SCHEDULER] Scheduled run skipped: {result.get('error')}")
+
+
 def _scheduled_job():
     global event_loop
     if event_loop and event_loop.is_running():
         print("[SCHEDULER] Triggering scheduled Rewards Farmer run...")
-        asyncio.run_coroutine_threadsafe(start_run(), event_loop)
+        asyncio.run_coroutine_threadsafe(_run_scheduled(), event_loop)
     else:
         print("[SCHEDULER] Event loop not available to run scheduled task.")
 
@@ -65,8 +72,12 @@ def reload_schedule():
 
     elif mode == "custom_times":
         times = config.schedule.custom_times or ["03:00", "15:00"]
+        valid_times = [t.strip() for t in times if isinstance(t, str) and TIME_RE.match(t.strip())]
+        if not valid_times:
+            print("[SCHEDULER] No valid custom times configured (expected HH:MM); scheduled runs disabled until fixed.")
+            return
         added = 0
-        for idx, t_str in enumerate(times):
+        for idx, t_str in enumerate(valid_times):
             parts = t_str.strip().split(":")
             if len(parts) == 2:
                 try:
@@ -81,7 +92,7 @@ def reload_schedule():
                     added += 1
                 except ValueError:
                     pass
-        print(f"[SCHEDULER] Scheduled runs at {added} specific time(s) a day: {', '.join(times)} UTC.")
+        print(f"[SCHEDULER] Scheduled runs at {added} specific time(s) a day: {', '.join(valid_times)} UTC.")
 
     else:
         # Default daily run
@@ -94,6 +105,16 @@ def reload_schedule():
             replace_existing=True,
         )
         print(f"[SCHEDULER] Scheduled daily run at {hour:02d}:{minute:02d} UTC.")
+
+
+def shutdown_scheduler():
+    global scheduler
+    if scheduler:
+        try:
+            scheduler.shutdown(wait=False)
+        except Exception as e:
+            print(f"[SCHEDULER] Error during shutdown: {e}")
+        scheduler = None
 
 
 def get_schedule_info() -> Dict[str, Any]:

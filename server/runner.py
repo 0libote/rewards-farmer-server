@@ -21,13 +21,20 @@ from server.account_checker import check_account_login
 LOGS_DIR = DATA_DIR / "logs"
 HISTORY_FILE = LOGS_DIR / "history.json"
 
+TASK_DAILY_SET = "Bing daily set"
+TASK_EXPLORE = "Explore on Bing"
+TASK_VISUAL = "Visual search"
+TASK_MISC = "Misc cards"
+TASK_SEARCHES = "Required searches"
+TASK_BONUS = "Bonus points"
+
 TASK_NAMES = [
-    "Bing daily set",
-    "Explore on Bing",
-    "Visual search",
-    "Misc cards",
-    "Required searches",
-    "Bonus points",
+    TASK_DAILY_SET,
+    TASK_EXPLORE,
+    TASK_VISUAL,
+    TASK_MISC,
+    TASK_SEARCHES,
+    TASK_BONUS,
 ]
 
 
@@ -54,6 +61,35 @@ class RunState:
 
 state = RunState()
 log_subscribers: List[asyncio.Queue] = []
+
+# Serializes run setup so two simultaneous POST /api/run calls can't both
+# pass the is_running check and launch duplicate automation processes.
+_run_lock = asyncio.Lock()
+
+# Cap per-client websocket backlog so a slow/disconnected browser tab can't
+# grow server memory without bound; oldest lines are dropped first.
+MAX_CLIENT_QUEUE = 500
+
+# Only files matching this pattern may be served via /api/logs/{filename}.
+LOG_FILENAME_RE = re.compile(r"^run_\d{8}_\d{6}\.log$")
+MAX_KEPT_LOG_FILES = 30
+
+
+def is_safe_log_filename(filename: str) -> bool:
+    return bool(LOG_FILENAME_RE.match(Path(filename).name)) and filename == Path(filename).name
+
+
+def _prune_old_logs() -> None:
+    """Delete oldest run_*.log files, keeping disk usage bounded."""
+    try:
+        logs = sorted(LOGS_DIR.glob("run_*.log"), key=lambda p: p.name)
+        for old in logs[:-MAX_KEPT_LOG_FILES] if len(logs) > MAX_KEPT_LOG_FILES else []:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    except Exception:
+        pass
 
 
 def get_history() -> List[Dict[str, Any]]:
@@ -84,7 +120,9 @@ def get_lifetime_stats() -> Dict[str, Any]:
     successful_runs = sum(1 for r in history if r.get("exit_code") == 0)
     total_points = 0
     today_points = 0
-    today_prefix = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    # start_time values are recorded with the local clock (datetime.now()),
+    # so compare against the local date rather than UTC.
+    today_prefix = datetime.datetime.now().strftime("%Y-%m-%d")
 
     for r in history:
         stats = r.get("stats", {})
@@ -119,6 +157,7 @@ def save_history_entry(entry: Dict[str, Any]):
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(history, f, indent=2)
+    _prune_old_logs()
 
 
 async def broadcast_line(line: str):
@@ -128,6 +167,11 @@ async def broadcast_line(line: str):
 
     for queue in list(log_subscribers):
         try:
+            if queue.qsize() >= MAX_CLIENT_QUEUE:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
             queue.put_nowait(line)
         except Exception:
             pass
@@ -138,20 +182,25 @@ async def send_webhook(title: str, description: str, color: int = 3447003):
     if not config.webhook_url:
         return
 
-    payload = {
+    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    discord_payload = {
         "embeds": [
             {
                 "title": f"🌾 Rewards Farmer: {title}",
                 "description": description,
                 "color": color,
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "timestamp": timestamp,
             }
         ]
     }
+    # Plain-text fallback for generic webhook receivers (Gotify, ntfy, ...).
+    plain_text = f"Rewards Farmer: {title}\n{description}"
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(config.webhook_url, json=payload)
+            resp = await client.post(config.webhook_url, json=discord_payload)
+            if resp.status_code >= 400:
+                await client.post(config.webhook_url, json={"text": plain_text})
     except Exception as e:
         print(f"Failed to send webhook: {e}")
 
@@ -184,15 +233,15 @@ def _recalc_points(acc_entry: Dict[str, Any]):
     # Task completions awards
     t_pts = 0
     tasks = acc_entry.get("tasks", {})
-    if tasks.get("Bing daily set") == "OK":
+    if tasks.get(TASK_DAILY_SET) == "OK":
         t_pts += 30
-    if tasks.get("Explore on Bing") == "OK":
+    if tasks.get(TASK_EXPLORE) == "OK":
         t_pts += 40
-    if tasks.get("Visual search") == "OK":
+    if tasks.get(TASK_VISUAL) == "OK":
         t_pts += 5
-    if tasks.get("Misc cards") == "OK":
+    if tasks.get(TASK_MISC) == "OK":
         t_pts += 20
-    if tasks.get("Bonus points") == "OK":
+    if tasks.get(TASK_BONUS) == "OK":
         t_pts += 10
 
     # Search quota awards
@@ -262,17 +311,21 @@ def parse_log_line(line: str):
                     acc_entry["tasks"][task_name] = clean_tag
             _recalc_points(acc_entry)
 
-    # Step progress tracking based on completed tasks
-    if "[OK] Bing daily set" in line:
+    # Step progress tracking based on completed tasks. Advance on any terminal
+    # tag ([OK]/[SKIP]/[FAIL]) so a failed task doesn't stall the banner.
+    def _tagged(task: str) -> bool:
+        return any(f"[{t}] {task}" in line for t in ("OK", "SKIP", "FAIL"))
+
+    if _tagged(TASK_DAILY_SET):
         acc_entry["current_step"] = "Explore on Bing (promotional cards)"
         acc_entry["step_index"] = 2
-    elif "[OK] Explore on Bing" in line or "[SKIP] Explore on Bing" in line:
+    elif _tagged(TASK_EXPLORE):
         acc_entry["current_step"] = "Visual search"
         acc_entry["step_index"] = 3
-    elif "[OK] Visual search" in line or "[SKIP] Visual search" in line:
+    elif _tagged(TASK_VISUAL):
         acc_entry["current_step"] = "Misc cards"
         acc_entry["step_index"] = 4
-    elif "[OK] Misc cards" in line or "[SKIP] Misc cards" in line:
+    elif _tagged(TASK_MISC):
         acc_entry["current_step"] = "Required searches (measuring quota breakdown)"
         acc_entry["step_index"] = 5
 
@@ -315,22 +368,41 @@ def parse_log_line(line: str):
         acc_entry["search_points"] = f"{earned}/{max_pts}"
         _recalc_points(acc_entry)
 
-    if "[OK] Required searches" in line:
+    if _tagged(TASK_SEARCHES):
         acc_entry["current_step"] = "Claiming bonus points"
         acc_entry["step_index"] = 6
         _recalc_points(acc_entry)
-    elif "[OK] Bonus points" in line or "[SKIP] Bonus points" in line:
+    elif _tagged(TASK_BONUS):
         acc_entry["current_step"] = "Finished"
         acc_entry["status"] = "COMPLETED"
         _recalc_points(acc_entry)
 
 
 async def start_run(accounts: Optional[List[str]] = None) -> Dict[str, Any]:
+    async with _run_lock:
+        return await _start_run_locked(accounts)
+
+
+async def _start_run_locked(accounts: Optional[List[str]] = None) -> Dict[str, Any]:
     if state.is_running:
         return {"success": False, "error": "A run is already currently in progress."}
 
-    # Make sure upstream exists
-    info = ensure_upstream()
+    # The interactive browser holds the same Edge profile open; running
+    # automation against it concurrently would corrupt session cookies.
+    try:
+        from server.vnc_manager import get_vnc_status
+
+        vnc = get_vnc_status()
+        if vnc.get("active"):
+            return {
+                "success": False,
+                "error": f"Cannot start automation while the interactive browser is open for '{vnc.get('account')}'. Click 'Finish & Save Login' first.",
+            }
+    except ImportError:
+        pass
+
+    # Make sure upstream exists (blocking git I/O: keep off the event loop)
+    info = await asyncio.to_thread(ensure_upstream)
     if not info.get("installed"):
         return {"success": False, "error": f"Upstream repo not ready: {info.get('error')}"}
 
@@ -340,10 +412,12 @@ async def start_run(accounts: Optional[List[str]] = None) -> Dict[str, Any]:
     if not target_accounts:
         return {"success": False, "error": "No accounts configured to run."}
 
-    # Verify that requested accounts are logged in first
+    # Verify that requested accounts are logged in first (blocking sqlite I/O).
+    auth_results = await asyncio.gather(
+        *(asyncio.to_thread(check_account_login, acc) for acc in target_accounts)
+    )
     unauthenticated = []
-    for acc in target_accounts:
-        auth_info = check_account_login(acc)
+    for acc, auth_info in zip(target_accounts, auth_results):
         if not auth_info.get("logged_in"):
             unauthenticated.append(f"{acc} ({auth_info.get('reason', 'Sign-in required')})")
 
@@ -358,7 +432,8 @@ async def start_run(accounts: Optional[List[str]] = None) -> Dict[str, Any]:
     for acc in target_accounts:
         state.account_stats[acc] = init_account_stat_entry(acc)
 
-    # Setup log file
+    # Setup log file (ensure the directory exists before the child writes to it)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = LOGS_DIR / f"run_{timestamp}.log"
     state.active_log_file = log_file
@@ -387,7 +462,10 @@ async def _run_process(env: Dict[str, str], target_accounts: List[str], log_file
     wrapper_py = Path(__file__).resolve().parent / "farm_wrapper.py"
     target_script = str(wrapper_py) if wrapper_py.exists() else str(UPSTREAM_DIR / "src" / "main.py")
 
-    env["PYTHONPATH"] = f"{str(UPSTREAM_DIR / 'src')}:{str(Path(__file__).resolve().parent)}:{env.get('PYTHONPATH', '')}"
+    pythonpath_parts = [str(UPSTREAM_DIR / "src"), str(Path(__file__).resolve().parent)]
+    if env.get("PYTHONPATH"):
+        pythonpath_parts.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = ":".join(pythonpath_parts)
 
     try:
         state.process = await asyncio.create_subprocess_exec(

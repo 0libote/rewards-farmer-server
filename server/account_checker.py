@@ -2,10 +2,11 @@ import json
 import sqlite3
 import shutil
 import tempfile
+import time
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
-from server.config import PROFILES_DIR
+from server.config import PROFILES_DIR, is_valid_account_name
 
 AUTH_COOKIE_NAMES = {
     ".MSA.Auth",
@@ -16,11 +17,24 @@ AUTH_COOKIE_NAMES = {
     "WLSSC",
 }
 
+# Chromium stores expiry as microseconds since 1601-01-01. A value of 0 marks
+# a session cookie. Offset between the Chromium epoch and the Unix epoch.
+_CHROMIUM_TO_UNIX_OFFSET_S = 11644473600
+
+
+def _chromium_now_us() -> int:
+    return int((time.time() + _CHROMIUM_TO_UNIX_OFFSET_S) * 1_000_000)
+
 
 def get_profile_dir(account_name: str) -> Path:
-    if account_name == "default":
-        return PROFILES_DIR.resolve()
-    return (PROFILES_DIR / account_name).resolve()
+    base = PROFILES_DIR.resolve()
+    target = (PROFILES_DIR / account_name).resolve() if account_name != "default" else base
+    # Guard against path traversal (e.g. account name "../../etc").
+    try:
+        target.relative_to(base)
+    except ValueError:
+        raise ValueError(f"Invalid account name: {account_name!r}")
+    return target
 
 
 def find_cookie_db(profile_dir: Path) -> Optional[Path]:
@@ -35,6 +49,47 @@ def find_cookie_db(profile_dir: Path) -> Optional[Path]:
         if p.exists() and p.is_file() and p.stat().st_size > 0:
             return p
     return None
+
+
+_MS_DOMAINS = ("bing.com", "live.com", "microsoft.com", "microsoftonline.com")
+
+
+def _is_ms_host(host: str) -> bool:
+    return any(domain in host for domain in _MS_DOMAINS)
+
+
+def _is_auth_cookie(host: str, name: str) -> bool:
+    return name in AUTH_COOKIE_NAMES or (
+        "bing.com" in host and ("Auth" in name or "Token" in name)
+    )
+
+
+def _is_live_cookie(expires_utc: object, now_us: int) -> bool:
+    """Session cookies (expires_utc == 0) and unparseable values count as live:
+    they only exist while a signed-in browser session created them."""
+    try:
+        exp = int(expires_utc or 0)
+    except (TypeError, ValueError):
+        return True
+    return exp == 0 or exp > now_us
+
+
+def _classify_cookies(rows: List[Tuple[str, str, int]]) -> Tuple[List[str], List[str], bool]:
+    """Split cookie rows into valid auth tokens, expired auth tokens, and
+    whether any Microsoft/Bing cookie exists at all."""
+    now_us = _chromium_now_us()
+    valid_auth: List[str] = []
+    expired_auth: List[str] = []
+    has_ms_cookie = False
+    for host, name, expires_utc in rows:
+        host = host or ""
+        has_ms_cookie = has_ms_cookie or _is_ms_host(host)
+        if not _is_auth_cookie(host, name):
+            continue
+        target = valid_auth if _is_live_cookie(expires_utc, now_us) else expired_auth
+        if name not in target:
+            target.append(name)
+    return valid_auth, expired_auth, has_ms_cookie
 
 
 def get_account_email(profile_dir: Path) -> Optional[str]:
@@ -78,7 +133,22 @@ def get_account_email(profile_dir: Path) -> Optional[str]:
 
 def check_account_login(account_name: str) -> Dict[str, Any]:
     """Checks whether an account's browser profile contains valid Microsoft authentication cookies."""
-    profile_dir = get_profile_dir(account_name)
+    if not is_valid_account_name(account_name):
+        return {
+            "account": account_name,
+            "logged_in": False,
+            "reason": "Invalid account name.",
+            "email": None,
+        }
+    try:
+        profile_dir = get_profile_dir(account_name)
+    except ValueError:
+        return {
+            "account": account_name,
+            "logged_in": False,
+            "reason": "Invalid account name.",
+            "email": None,
+        }
     if not profile_dir.exists():
         return {
             "account": account_name,
@@ -114,20 +184,21 @@ def check_account_login(account_name: str) -> Dict[str, Any]:
                     "email": None,
                 }
 
-            # Query for Microsoft Auth cookies
-            cursor.execute("SELECT host_key, name FROM cookies;")
+            # Query only Microsoft-related cookies instead of the whole table.
+            placeholders = ",".join("?" for _ in AUTH_COOKIE_NAMES)
+            cursor.execute(
+                f"SELECT host_key, name, expires_utc FROM cookies "
+                f"WHERE name IN ({placeholders}) "
+                f"OR host_key LIKE '%bing.com%' "
+                f"OR host_key LIKE '%live.com%' "
+                f"OR host_key LIKE '%microsoft.com%' "
+                f"OR host_key LIKE '%microsoftonline.com%'",
+                tuple(AUTH_COOKIE_NAMES),
+            )
             rows = cursor.fetchall()
             conn.close()
 
-            matched_auth = []
-            has_bing_cookie = False
-            for host, name in rows:
-                if "bing.com" in host or "live.com" in host or "microsoft.com" in host:
-                    has_bing_cookie = True
-                if name in AUTH_COOKIE_NAMES:
-                    matched_auth.append(name)
-                elif "bing.com" in host and ("Auth" in name or "Token" in name):
-                    matched_auth.append(name)
+            matched_auth, expired_auth, has_ms_cookie = _classify_cookies(rows)
 
             email = get_account_email(profile_dir)
 
@@ -140,10 +211,26 @@ def check_account_login(account_name: str) -> Dict[str, Any]:
                     "matched_tokens": matched_auth[:5],
                 }
 
+            if expired_auth:
+                return {
+                    "account": account_name,
+                    "logged_in": False,
+                    "reason": "Microsoft authentication tokens are expired. Please sign in again via Interactive Login.",
+                    "email": email,
+                }
+
+            if has_ms_cookie:
+                return {
+                    "account": account_name,
+                    "logged_in": False,
+                    "reason": "Bing cookies found but Microsoft authentication token is missing. Sign-in required.",
+                    "email": email,
+                }
+
             return {
                 "account": account_name,
                 "logged_in": False,
-                "reason": "Bing cookies found but Microsoft authentication token is missing or expired. Sign-in required.",
+                "reason": "No Microsoft session cookies found. Please log in first.",
                 "email": email,
             }
         except Exception as e:

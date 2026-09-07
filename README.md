@@ -14,7 +14,7 @@ Designed specifically for headless Docker servers (VPS, Synology, Unraid, TrueNA
 - 📊 **Real-Time Telemetry & Progress**: Track search points earned vs. daily maximums, live task statuses (`[OK]`, `[SKIP]`, `[FAIL]`), and execution history.
 - ⚡ **Live WebSocket Terminal**: Watch logs stream in real-time with color-coded syntax highlighting and auto-scroll.
 - ⏰ **Automated Daily Scheduler**: Built-in cron scheduler triggers runs at your chosen time (UTC) without external cron services.
-- 🔔 **Webhook Notifications**: Real-time Discord, Telegram, or Gotify alerts when daily runs start, complete, or fail.
+- 🔔 **Webhook Notifications**: Discord alerts (other generic webhook receivers get a plain-text fallback) when daily runs start, complete, or fail.
 - 🖼️ **Visual Search Image Tool**: Automatically fetches Wikimedia images via upstream's `random_image_for_visual_search.py` or allows uploading a custom image.
 - 📝 **Seed Wordlist Editor**: View and customize `nouns.txt` directly from the web settings.
 - 📦 **Automated GHCR Package**: Automatically built and published as a Docker container package (`ghcr.io/0libote/rewards-farmer-server:latest`) on every commit.
@@ -93,11 +93,15 @@ data/
 | `8345` | HTTP / WebSocket | Main Web Dashboard, REST API & live log terminal |
 | `6345` | HTTP / WebSocket | Interactive Browser Login (noVNC stream) |
 
+> ⚠️ The noVNC stream on `6345` has no password. On remote servers, bind it to localhost (`127.0.0.1:6345:6345`) and reach it via an SSH tunnel or authenticated reverse proxy instead of exposing it publicly.
+
 Settings can be changed directly in the **Web Dashboard** under the Settings modal (⚙️):
 - **Search Query Backend**: Choose between `trends` (default, zero setup using Google/Bing trends and Wikipedia) or `llm` (Ollama LLM).
 - **Ollama Host**: Address to reach your Ollama instance (e.g. `host.docker.internal:11434`).
-- **Daily Schedule**: Specify the UTC time (Hour:Minute) for automated daily runs.
-- **Webhook URL**: Discord or generic webhook URL to receive status notifications.
+- **Automated Schedule**: Daily at a fixed UTC time, every N hours, or at multiple custom UTC times — plus an optional run shortly after startup.
+- **Webhook URL**: Discord webhook URL to receive status notifications (generic receivers get a plain-text fallback).
+
+A `/api/health` endpoint (also at `/health`) is available for container healthchecks and uptime monitoring. Past run logs are kept under `./data/logs` (newest 30 files) and can be opened from the **Recent Run History** table or via `/api/logs/{filename}`.
 
 ---
 
