@@ -8,7 +8,7 @@ from typing import List, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -48,6 +48,12 @@ WEB_DIR = BASE_DIR / "web"
 
 MAX_VISUAL_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_NOUNS_BYTES = 200 * 1024
+
+# Shared OpenAPI error docs for endpoints raising HTTPException.
+_ERROR_400 = {"description": "Invalid request"}
+_ERROR_404 = {"description": "Not found"}
+_ERROR_413 = {"description": "Payload too large"}
+_ERROR_500 = {"description": "Server error"}
 
 
 @asynccontextmanager
@@ -154,20 +160,23 @@ async def health_check():
     }
 
 
-@app.post("/api/run")
-async def trigger_run(req: RunRequest = RunRequest()):
+@app.post("/api/run", responses={400: _ERROR_400})
+async def trigger_run(req: Optional[RunRequest] = None):
+    req = req if req is not None else RunRequest()
     if req.accounts:
         invalid = [a for a in req.accounts if not is_valid_account_name(a.strip())]
         if invalid:
             raise HTTPException(status_code=400, detail=f"Invalid account name(s): {', '.join(invalid)}")
-        req.accounts = [a.strip() for a in req.accounts]
-    result = await start_run(accounts=req.accounts)
+        req_accounts = [a.strip() for a in req.accounts]
+    else:
+        req_accounts = None
+    result = await start_run(accounts=req_accounts)
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error"))
     return result
 
 
-@app.post("/api/stop")
+@app.post("/api/stop", responses={400: _ERROR_400})
 async def trigger_stop():
     result = await stop_run()
     if not result.get("success"):
@@ -180,7 +189,7 @@ async def fetch_history():
     return await asyncio.to_thread(get_history)
 
 
-@app.get("/api/logs/{filename}")
+@app.get("/api/logs/{filename}", responses={404: _ERROR_404})
 async def fetch_log_file(filename: str):
     """Serve a single persisted run log. The filename is strictly validated
     (run_YYYYMMDD_HHMMSS.log) so callers can't escape the logs directory."""
@@ -214,7 +223,7 @@ async def trigger_upstream_update():
     return update_upstream()
 
 
-@app.post("/api/vnc/start")
+@app.post("/api/vnc/start", responses={400: _ERROR_400})
 async def trigger_vnc_start(req: VncStartRequest):
     if not is_valid_account_name(req.account.strip()):
         raise HTTPException(status_code=400, detail="Invalid account name")
@@ -248,7 +257,7 @@ async def visual_search_status():
     }
 
 
-@app.post("/api/visual-search/generate")
+@app.post("/api/visual-search/generate", responses={500: _ERROR_500})
 async def generate_visual_image():
     result = generate_visual_search_image()
     if not result.get("success"):
@@ -256,7 +265,10 @@ async def generate_visual_image():
     return result
 
 
-@app.post("/api/visual-search/upload")
+@app.post(
+    "/api/visual-search/upload",
+    responses={400: _ERROR_400, 413: _ERROR_413, 500: _ERROR_500},
+)
 async def upload_visual_image(file: UploadFile = File(...)):
     try:
         content = await file.read()
@@ -289,7 +301,7 @@ async def get_nouns():
         return {"content": f.read()}
 
 
-@app.post("/api/nouns")
+@app.post("/api/nouns", responses={413: _ERROR_413})
 async def update_nouns(req: NounsUpdateRequest):
     if len(req.content) > MAX_NOUNS_BYTES:
         raise HTTPException(status_code=413, detail="Wordlist too large (max 200 KB)")
@@ -299,7 +311,7 @@ async def update_nouns(req: NounsUpdateRequest):
     return {"success": True}
 
 
-@app.post("/api/accounts/add")
+@app.post("/api/accounts/add", responses={400: _ERROR_400})
 async def add_account(req: AccountActionRequest):
     name = req.account.strip()
     if not is_valid_account_name(name):
@@ -317,7 +329,7 @@ async def add_account(req: AccountActionRequest):
     return {"success": True, "accounts": cfg.accounts}
 
 
-@app.post("/api/accounts/remove")
+@app.post("/api/accounts/remove", responses={400: _ERROR_400})
 async def remove_account(req: AccountActionRequest):
     name = req.account.strip()
     if not is_valid_account_name(name):

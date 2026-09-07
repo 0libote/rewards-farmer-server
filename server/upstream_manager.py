@@ -10,6 +10,8 @@ UPSTREAM_REPO_URL = os.getenv(
     "UPSTREAM_REPO_URL", "https://github.com/User0332/rewards-farmer.git"
 )
 
+VISUAL_SEARCH_FILENAME = "visual_search.jpg"
+
 
 @lru_cache(maxsize=1)
 def get_edge_version() -> str:
@@ -79,7 +81,7 @@ def _setup_symlinks():
             print(f"Symlink error for nouns.txt: {e}")
 
     # visual_search.jpg
-    upstream_visual = UPSTREAM_DIR / "visual_search.jpg"
+    upstream_visual = UPSTREAM_DIR / VISUAL_SEARCH_FILENAME
     if VISUAL_SEARCH_IMAGE.exists() and not upstream_visual.is_symlink():
         try:
             if upstream_visual.exists():
@@ -160,12 +162,12 @@ def generate_visual_search_image() -> Dict[str, Any]:
         # The upstream script writes next to itself or the repo root; persist
         # whatever it produced into the data volume so it survives restarts.
         candidates = [
-            UPSTREAM_DIR / "visual_search.jpg",
-            UPSTREAM_DIR / "src" / "visual_search.jpg",
+            UPSTREAM_DIR / VISUAL_SEARCH_FILENAME,
+            UPSTREAM_DIR / "src" / VISUAL_SEARCH_FILENAME,
         ]
         generated = next((p for p in candidates if p.exists() and p.is_file()), None)
         if generated is None:
-            return {"success": False, "error": "Generator ran but no visual_search.jpg was produced."}
+            return {"success": False, "error": f"Generator ran but no {VISUAL_SEARCH_FILENAME} was produced."}
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         if generated.resolve() != VISUAL_SEARCH_IMAGE.resolve():
             shutil.copy2(str(generated), str(VISUAL_SEARCH_IMAGE))

@@ -21,13 +21,20 @@ from server.account_checker import check_account_login
 LOGS_DIR = DATA_DIR / "logs"
 HISTORY_FILE = LOGS_DIR / "history.json"
 
+TASK_DAILY_SET = "Bing daily set"
+TASK_EXPLORE = "Explore on Bing"
+TASK_VISUAL = "Visual search"
+TASK_MISC = "Misc cards"
+TASK_SEARCHES = "Required searches"
+TASK_BONUS = "Bonus points"
+
 TASK_NAMES = [
-    "Bing daily set",
-    "Explore on Bing",
-    "Visual search",
-    "Misc cards",
-    "Required searches",
-    "Bonus points",
+    TASK_DAILY_SET,
+    TASK_EXPLORE,
+    TASK_VISUAL,
+    TASK_MISC,
+    TASK_SEARCHES,
+    TASK_BONUS,
 ]
 
 
@@ -226,15 +233,15 @@ def _recalc_points(acc_entry: Dict[str, Any]):
     # Task completions awards
     t_pts = 0
     tasks = acc_entry.get("tasks", {})
-    if tasks.get("Bing daily set") == "OK":
+    if tasks.get(TASK_DAILY_SET) == "OK":
         t_pts += 30
-    if tasks.get("Explore on Bing") == "OK":
+    if tasks.get(TASK_EXPLORE) == "OK":
         t_pts += 40
-    if tasks.get("Visual search") == "OK":
+    if tasks.get(TASK_VISUAL) == "OK":
         t_pts += 5
-    if tasks.get("Misc cards") == "OK":
+    if tasks.get(TASK_MISC) == "OK":
         t_pts += 20
-    if tasks.get("Bonus points") == "OK":
+    if tasks.get(TASK_BONUS) == "OK":
         t_pts += 10
 
     # Search quota awards
@@ -309,16 +316,16 @@ def parse_log_line(line: str):
     def _tagged(task: str) -> bool:
         return any(f"[{t}] {task}" in line for t in ("OK", "SKIP", "FAIL"))
 
-    if _tagged("Bing daily set"):
+    if _tagged(TASK_DAILY_SET):
         acc_entry["current_step"] = "Explore on Bing (promotional cards)"
         acc_entry["step_index"] = 2
-    elif _tagged("Explore on Bing"):
+    elif _tagged(TASK_EXPLORE):
         acc_entry["current_step"] = "Visual search"
         acc_entry["step_index"] = 3
-    elif _tagged("Visual search"):
+    elif _tagged(TASK_VISUAL):
         acc_entry["current_step"] = "Misc cards"
         acc_entry["step_index"] = 4
-    elif _tagged("Misc cards"):
+    elif _tagged(TASK_MISC):
         acc_entry["current_step"] = "Required searches (measuring quota breakdown)"
         acc_entry["step_index"] = 5
 
@@ -361,11 +368,11 @@ def parse_log_line(line: str):
         acc_entry["search_points"] = f"{earned}/{max_pts}"
         _recalc_points(acc_entry)
 
-    if _tagged("Required searches"):
+    if _tagged(TASK_SEARCHES):
         acc_entry["current_step"] = "Claiming bonus points"
         acc_entry["step_index"] = 6
         _recalc_points(acc_entry)
-    elif _tagged("Bonus points"):
+    elif _tagged(TASK_BONUS):
         acc_entry["current_step"] = "Finished"
         acc_entry["status"] = "COMPLETED"
         _recalc_points(acc_entry)
@@ -394,8 +401,8 @@ async def _start_run_locked(accounts: Optional[List[str]] = None) -> Dict[str, A
     except ImportError:
         pass
 
-    # Make sure upstream exists
-    info = ensure_upstream()
+    # Make sure upstream exists (blocking git I/O: keep off the event loop)
+    info = await asyncio.to_thread(ensure_upstream)
     if not info.get("installed"):
         return {"success": False, "error": f"Upstream repo not ready: {info.get('error')}"}
 
@@ -405,10 +412,12 @@ async def _start_run_locked(accounts: Optional[List[str]] = None) -> Dict[str, A
     if not target_accounts:
         return {"success": False, "error": "No accounts configured to run."}
 
-    # Verify that requested accounts are logged in first
+    # Verify that requested accounts are logged in first (blocking sqlite I/O).
+    auth_results = await asyncio.gather(
+        *(asyncio.to_thread(check_account_login, acc) for acc in target_accounts)
+    )
     unauthenticated = []
-    for acc in target_accounts:
-        auth_info = check_account_login(acc)
+    for acc, auth_info in zip(target_accounts, auth_results):
         if not auth_info.get("logged_in"):
             unauthenticated.append(f"{acc} ({auth_info.get('reason', 'Sign-in required')})")
 

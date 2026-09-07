@@ -51,6 +51,29 @@ def find_cookie_db(profile_dir: Path) -> Optional[Path]:
     return None
 
 
+_MS_DOMAINS = ("bing.com", "live.com", "microsoft.com", "microsoftonline.com")
+
+
+def _is_ms_host(host: str) -> bool:
+    return any(domain in host for domain in _MS_DOMAINS)
+
+
+def _is_auth_cookie(host: str, name: str) -> bool:
+    return name in AUTH_COOKIE_NAMES or (
+        "bing.com" in host and ("Auth" in name or "Token" in name)
+    )
+
+
+def _is_live_cookie(expires_utc: object, now_us: int) -> bool:
+    """Session cookies (expires_utc == 0) and unparseable values count as live:
+    they only exist while a signed-in browser session created them."""
+    try:
+        exp = int(expires_utc or 0)
+    except (TypeError, ValueError):
+        return True
+    return exp == 0 or exp > now_us
+
+
 def _classify_cookies(rows: List[Tuple[str, str, int]]) -> Tuple[List[str], List[str], bool]:
     """Split cookie rows into valid auth tokens, expired auth tokens, and
     whether any Microsoft/Bing cookie exists at all."""
@@ -60,25 +83,12 @@ def _classify_cookies(rows: List[Tuple[str, str, int]]) -> Tuple[List[str], List
     has_ms_cookie = False
     for host, name, expires_utc in rows:
         host = host or ""
-        if "bing.com" in host or "live.com" in host or "microsoft.com" in host or "microsoftonline.com" in host:
-            has_ms_cookie = True
-        is_auth = name in AUTH_COOKIE_NAMES or (
-            "bing.com" in host and ("Auth" in name or "Token" in name)
-        )
-        if not is_auth:
+        has_ms_cookie = has_ms_cookie or _is_ms_host(host)
+        if not _is_auth_cookie(host, name):
             continue
-        try:
-            exp = int(expires_utc or 0)
-        except (TypeError, ValueError):
-            exp = 0
-        # expires_utc == 0 is a session cookie: count it, it only exists
-        # while a signed-in browser session created it.
-        if exp == 0 or exp > now_us:
-            if name not in valid_auth:
-                valid_auth.append(name)
-        else:
-            if name not in expired_auth:
-                expired_auth.append(name)
+        target = valid_auth if _is_live_cookie(expires_utc, now_us) else expired_auth
+        if name not in target:
+            target.append(name)
     return valid_auth, expired_auth, has_ms_cookie
 
 

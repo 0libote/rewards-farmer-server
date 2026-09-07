@@ -307,7 +307,7 @@
       <!-- Settings Form -->
       <div class="space-y-4 text-xs">
         <div>
-          <label class="block font-semibold text-zinc-300 mb-1">Search Query Backend</label>
+          <label for="cfg-query-source" class="block font-semibold text-zinc-300 mb-1">Search Query Backend</label>
           <select id="cfg-query-source" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
             <option value="trends">Google / Bing Trends & Wikipedia (zero setup, recommended)</option>
             <option value="llm">Ollama LLM (requires Ollama instance)</option>
@@ -315,18 +315,18 @@
         </div>
 
         <div id="cfg-ollama-group">
-          <label class="block font-semibold text-zinc-300 mb-1">Ollama Host (if using LLM)</label>
+          <label for="cfg-ollama-host" class="block font-semibold text-zinc-300 mb-1">Ollama Host (if using LLM)</label>
           <input type="text" id="cfg-ollama-host" placeholder="host.docker.internal:11434" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
         </div>
 
         <div class="border-t border-zinc-800 pt-3">
-          <label class="block font-semibold text-zinc-300 mb-1">Automated Schedule (UTC)</label>
+          <p class="block font-semibold text-zinc-300 mb-1">Automated Schedule (UTC)</p>
           <div class="flex items-center space-x-4 flex-wrap gap-y-2">
             <label class="flex items-center space-x-2 text-zinc-300 cursor-pointer">
               <input type="checkbox" id="cfg-sched-enabled" class="rounded bg-zinc-800 border-zinc-700 text-emerald-600 focus:ring-0">
               <span>Enable schedule</span>
             </label>
-            <select id="cfg-sched-mode" onchange="toggleScheduleModeFields()" class="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-zinc-200 focus:outline-none focus:border-emerald-500">
+            <select id="cfg-sched-mode" aria-label="Schedule mode" onchange="toggleScheduleModeFields()" class="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-zinc-200 focus:outline-none focus:border-emerald-500">
               <option value="daily">Daily at fixed time</option>
               <option value="interval">Every N hours</option>
               <option value="custom_times">At specific times</option>
@@ -334,18 +334,18 @@
           </div>
           <div id="cfg-sched-daily" class="flex items-center space-x-2 mt-2">
             <span>Time (HH:MM):</span>
-            <input type="number" id="cfg-sched-hour" min="0" max="23" value="3" class="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-center text-zinc-200">
+            <input type="number" id="cfg-sched-hour" aria-label="Schedule hour (UTC)" min="0" max="23" value="3" class="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-center text-zinc-200">
             <span>:</span>
-            <input type="number" id="cfg-sched-min" min="0" max="59" value="0" class="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-center text-zinc-200">
+            <input type="number" id="cfg-sched-min" aria-label="Schedule minute (UTC)" min="0" max="59" value="0" class="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-center text-zinc-200">
             <span class="text-zinc-500">UTC</span>
           </div>
           <div id="cfg-sched-interval" class="hidden items-center space-x-2 mt-2">
             <span>Every</span>
-            <input type="number" id="cfg-sched-interval-hours" min="1" max="168" value="6" class="w-20 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-center text-zinc-200">
+            <input type="number" id="cfg-sched-interval-hours" aria-label="Interval in hours" min="1" max="168" value="6" class="w-20 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-center text-zinc-200">
             <span class="text-zinc-500">hour(s)</span>
           </div>
           <div id="cfg-sched-custom" class="hidden mt-2">
-            <input type="text" id="cfg-sched-custom-times" placeholder="03:00, 15:00" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-zinc-200 focus:outline-none focus:border-emerald-500">
+            <input type="text" id="cfg-sched-custom-times" aria-label="Custom run times (comma-separated HH:MM, UTC)" placeholder="03:00, 15:00" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-zinc-200 focus:outline-none focus:border-emerald-500">
             <p class="text-[11px] text-zinc-500 mt-1">Comma-separated 24h times (HH:MM), UTC.</p>
           </div>
           <label class="flex items-center space-x-2 text-zinc-300 cursor-pointer mt-2">
@@ -362,13 +362,13 @@
         </div>
 
         <div class="border-t border-zinc-800 pt-3">
-          <label class="block font-semibold text-zinc-300 mb-1">Webhook URL (Discord; generic receivers get a plain-text fallback)</label>
+          <label for="cfg-webhook" class="block font-semibold text-zinc-300 mb-1">Webhook URL (Discord; generic receivers get a plain-text fallback)</label>
           <input type="text" id="cfg-webhook" placeholder="https://discord.com/api/webhooks/..." class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
           <p class="text-[11px] text-zinc-500 mt-1">Receive notifications when runs start, finish, or fail.</p>
         </div>
 
         <div class="border-t border-zinc-800 pt-3">
-          <label class="block font-semibold text-zinc-300 mb-1">Log Level</label>
+          <label for="cfg-log-level" class="block font-semibold text-zinc-300 mb-1">Log Level</label>
           <select id="cfg-log-level" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
             <option value="INFO">INFO (Standard output)</option>
             <option value="DEBUG">DEBUG (Detailed stack traces)</option>
@@ -390,7 +390,7 @@
         <!-- Edit Seed Words (nouns.txt) -->
         <div class="border-t border-zinc-800 pt-3">
           <div class="flex items-center justify-between mb-1">
-            <label class="font-semibold text-zinc-300">Seed Wordlist (nouns.txt)</label>
+            <label for="cfg-nouns-text" class="font-semibold text-zinc-300">Seed Wordlist (nouns.txt)</label>
             <button onclick="saveNouns()" class="text-emerald-400 hover:underline text-[11px]">Save Wordlist</button>
           </div>
           <textarea id="cfg-nouns-text" rows="4" class="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-2 terminal-font text-[11px] text-zinc-300 focus:outline-none focus:border-emerald-500" placeholder="One noun per line..."></textarea>
@@ -422,7 +422,12 @@
       }[c]));
     }
     function escapeJsString(s) {
-      return String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
+      const BS = String.fromCharCode(92); // backslash, kept out of literals
+      const NL = String.fromCharCode(10); // newline, kept out of literals
+      return String(s ?? '')
+        .replaceAll(BS, BS + BS)
+        .replaceAll("'", BS + "'")
+        .replaceAll(NL, BS + 'n');
     }
 
     function toggleScheduleModeFields() {
@@ -958,9 +963,9 @@
         schedule: {
           enabled: document.getElementById('cfg-sched-enabled').checked,
           mode: document.getElementById('cfg-sched-mode').value,
-          cron_hour: parseInt(document.getElementById('cfg-sched-hour').value) || 0,
-          cron_minute: parseInt(document.getElementById('cfg-sched-min').value) || 0,
-          interval_hours: parseInt(document.getElementById('cfg-sched-interval-hours').value) || prevSchedule.interval_hours || 6,
+          cron_hour: Number.parseInt(document.getElementById('cfg-sched-hour').value) || 0,
+          cron_minute: Number.parseInt(document.getElementById('cfg-sched-min').value) || 0,
+          interval_hours: Number.parseInt(document.getElementById('cfg-sched-interval-hours').value) || prevSchedule.interval_hours || 6,
           custom_times: customTimes.length > 0 ? customTimes : (prevSchedule.custom_times || ['03:00']),
           run_on_startup: document.getElementById('cfg-sched-startup').checked
         }
@@ -1078,7 +1083,7 @@
       div.textContent = line;
       terminal.appendChild(div);
       while (terminal.children.length > MAX_TERMINAL_LINES) {
-        terminal.removeChild(terminal.firstChild);
+        terminal.firstChild.remove();
       }
 
       if (document.getElementById('autoscroll-toggle').checked) {
