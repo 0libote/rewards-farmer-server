@@ -130,14 +130,25 @@ def get_lifetime_stats() -> Dict[str, Any]:
         for acc, st in stats.items():
             pts = st.get("points_gained")
             if pts is None:
-                sp = st.get("search_points")
-                if sp and "/" in sp:
-                    try:
-                        pts = int(sp.split("/")[0])
-                    except Exception:
+                # Legacy entries (pre-warnings) stored no points_gained and
+                # only a "30/30" style search_points string. The first number
+                # is the lifetime quota position, NOT points earned that run,
+                # so counting it inflates totals (every 30/30 run counted +30).
+                # Prefer measured search diff, else raw balance diff, else 0.
+                try:
+                    raw = st.get("raw_points_earned")
+                    if raw is not None:
+                        pts = int(raw)
+                    elif st.get("current_points") is not None and st.get("initial_points") is not None:
+                        pts = max(0, int(st["current_points"]) - int(st["initial_points"]))
+                    else:
                         pts = 0
-                else:
+                except (TypeError, ValueError):
                     pts = 0
+            try:
+                pts = int(pts)
+            except (TypeError, ValueError):
+                pts = 0
             total_points += pts
             if is_today:
                 today_points += pts
@@ -158,6 +169,179 @@ def save_history_entry(entry: Dict[str, Any]):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(history, f, indent=2)
     _prune_old_logs()
+
+
+def should_skip_scheduled_run(now: Optional[datetime.datetime] = None) -> Dict[str, Any]:
+    """Decide whether a scheduled (not manual) run should be skipped.
+
+    Skips when the most recent run ended recently with search quota complete
+    and 0 raw points earned: the daily cap is hit, so another run now can
+    only earn 0 while adding automation footprint. Manual runs always proceed;
+    callers (scheduler) check this, start_run() does not.
+    """
+    cfg = get_config()
+    sched = cfg.schedule
+    if not getattr(sched, "skip_empty_runs", True):
+        return {"skip": False, "reason": "smart-skip disabled"}
+    history = get_history()
+    if not history:
+        return {"skip": False, "reason": "no previous runs"}
+    last = history[0]
+    try:
+        end = datetime.datetime.fromisoformat(last.get("end_time") or last.get("start_time") or "")
+    except (ValueError, TypeError):
+        return {"skip": False, "reason": "last run time unparseable"}
+    now = now or datetime.datetime.now()
+    try:
+        hours = getattr(sched, "empty_skip_hours", 12)
+        window = datetime.timedelta(hours=max(1, int(hours)))
+    except (TypeError, ValueError):
+        window = datetime.timedelta(hours=12)
+    if now - end > window:
+        return {"skip": False, "reason": "last run outside skip window"}
+
+    stats = last.get("stats", {})
+    if not stats:
+        return {"skip": False, "reason": "no stats in last run"}
+    total_gained = 0
+    quota_complete_all = True
+    for st in stats.values():
+        try:
+            total_gained += int(st.get("points_gained", 0) or 0)
+        except (TypeError, ValueError):
+            pass
+        sp = st.get("search_points")
+        init_p, curr_p, max_p = st.get("initial_points"), st.get("current_points"), st.get("max_points")
+        if sp and "/" in str(sp):
+            try:
+                a, b = str(sp).split("/")
+                if int(a) < int(b):
+                    quota_complete_all = False
+            except (TypeError, ValueError):
+                pass
+        elif max_p is not None and curr_p is not None:
+            try:
+                if int(curr_p) < int(max_p):
+                    quota_complete_all = False
+            except (TypeError, ValueError):
+                pass
+        else:
+            # No quota info (e.g. searches never reached) -> don't skip.
+            quota_complete_all = False
+        _ = init_p
+    if total_gained > 0:
+        return {"skip": False, "reason": f"last run earned +{total_gained}"}
+    if not quota_complete_all:
+        return {"skip": False, "reason": "search quota not complete"}
+    return {
+        "skip": True,
+        "reason": f"last run {last.get('log_file', '')} earned 0 with quota complete ({window} window)",
+        "last_log": last.get("log_file"),
+    }
+
+
+def get_diagnostics() -> Dict[str, Any]:
+    """Aggregate failure patterns across recent history for the dashboard.
+
+    Answers "are we hitting the correct spots" without launching a browser:
+    visual SKIP rate, explore/misc incomplete-card frequency, empty-run rate,
+    and actionable next steps. Cheap to compute from history.json.
+    """
+    history = get_history()
+    total = len(history)
+    recent = history[:20]
+    visual_skip = sum(
+        1 for r in recent
+        for st in (r.get("stats", {}) or {}).values()
+        if isinstance(st, dict) and (st.get("tasks") or {}).get(TASK_VISUAL) == "SKIP"
+    )
+    explore_ok_with_issues = 0
+    explore_warn_examples: List[str] = []
+    misc_warn_examples: List[str] = []
+    empty_runs = 0
+    quota_complete_runs = 0
+    accounts_seen: List[str] = []
+    for r in recent:
+        stats = r.get("stats", {}) or {}
+        gained = 0
+        for acc, st in stats.items():
+            if acc not in accounts_seen:
+                accounts_seen.append(acc)
+            if not isinstance(st, dict):
+                continue
+            try:
+                gained += int(st.get("points_gained", 0) or 0)
+            except (TypeError, ValueError):
+                pass
+            warns = st.get("warnings") or []
+            has_explore_warn = any(str(w).startswith("Explore card") for w in warns)
+            has_misc_warn = any(str(w).startswith("Misc card") for w in warns)
+            tasks = st.get("tasks") or {}
+            if tasks.get(TASK_EXPLORE) == "OK" and has_explore_warn:
+                explore_ok_with_issues += 1
+            for w in warns:
+                if str(w).startswith("Explore card") and len(explore_warn_examples) < 3:
+                    if str(w) not in explore_warn_examples:
+                        explore_warn_examples.append(str(w))
+                if str(w).startswith("Misc card") and len(misc_warn_examples) < 3:
+                    if str(w) not in misc_warn_examples:
+                        misc_warn_examples.append(str(w))
+            sp = st.get("search_points")
+            if sp and "/" in str(sp):
+                try:
+                    a, b = str(sp).split("/")
+                    if int(a) >= int(b):
+                        quota_complete_runs += 1
+                except (TypeError, ValueError):
+                    pass
+        if gained == 0 and r.get("exit_code") == 0:
+            empty_runs += 1
+
+    suggestions: List[str] = []
+    if recent and visual_skip == len(recent):
+        suggestions.append(
+            "Visual search SKIP on every recent run: this market variant has no "
+            "'visual search streak' entry (see upstream issue #80). No action in "
+            "automation - verify once manually whether rewards.bing.com/earn shows "
+            "a Visual Search streak; if not, this SKIP is correct, not a miss."
+        )
+    if explore_ok_with_issues:
+        suggestions.append(
+            f"Explore on Bing reports [OK] but {explore_ok_with_issues}/{len(recent)} recent "
+            "runs left cards incomplete after searching. Those searches counted toward "
+            "the daily quota without clearing the card - check the card descriptions "
+            "manually once; if they need a specific click-through (not just a search), "
+            "upstream needs a selector fix (paste diagnostics into a rewards-farmer issue)."
+        )
+    if misc_warn_examples:
+        suggestions.append(
+            "Misc cards incomplete (e.g. 'Download the Bing app' promos) cannot complete "
+            "from headless Edge - expected. They are correctly reported as warnings, not failures."
+        )
+    if recent and empty_runs >= max(3, len(recent) // 2):
+        suggestions.append(
+            f"{empty_runs}/{len(recent)} recent runs earned 0 pts (quota already complete). "
+            "Enable smart-skip (schedule.skip_empty_runs) so the scheduler stops firing "
+            "empty runs every 3h - they add ban-surface for zero gain. Manual runs always work."
+        )
+    if recent and quota_complete_runs == len(recent):
+        suggestions.append(
+            "Search quota reads complete (e.g. 30/30) on every recent run. Under the 2026 "
+            "Member/Silver/Gold system 30 is the full Silver daily cap (shared PC+mobile), "
+            "not a bug - the old 90/150 Level-2 caps no longer apply in migrated regions."
+        )
+
+    return {
+        "total_runs_analyzed": total,
+        "recent_runs_analyzed": len(recent),
+        "accounts": accounts_seen,
+        "visual_skip_recent": visual_skip,
+        "explore_ok_with_issues_recent": explore_ok_with_issues,
+        "empty_runs_recent": empty_runs,
+        "explore_examples": explore_warn_examples,
+        "misc_examples": misc_warn_examples,
+        "suggestions": suggestions,
+    }
 
 
 async def broadcast_line(line: str):
@@ -217,6 +401,12 @@ def init_account_stat_entry(name: str) -> Dict[str, Any]:
         "final_balance": None,
         "raw_points_earned": None,
         "points_gained": 0,
+        # Card-level issues within an [OK] task, e.g. "Explore card X not
+        # complete after searching". Upstream marks the task [OK] anyway, so
+        # without this the dashboard reports full success while points are
+        # left behind. Kept as a plain list of short strings for the API/UI.
+        "warnings": [],
+        "incomplete_cards": 0,
         "current_step": "Initializing browser...",
         "step_index": 0,
         "total_steps": 6,
@@ -225,34 +415,36 @@ def init_account_stat_entry(name: str) -> Dict[str, Any]:
 
 
 def _recalc_points(acc_entry: Dict[str, Any]):
-    """Calculate raw points earned across all tasks + searches or use raw balance diff."""
+    """Honest points math: raw balance diff is truth, search diff is fallback.
+
+    The old version added hardcoded pre-2026 task estimates (30+40+5+20+10)
+    on top of the search diff, so a run where every task reported [OK] but
+    earned nothing still showed +100 pts. Since the 2026 Member/Silver/Gold
+    overhaul those estimates are wrong anyway (daily set 30->15, caps
+    15/30/60 shared across PC+mobile). Now:
+      - raw balance diff (from farm_wrapper [POINTS] lines) wins when present,
+      - otherwise use measured search progress only (current - initial),
+      - task_points is kept as a count of OK tasks for display, not earnings.
+    """
     if acc_entry.get("raw_points_earned") is not None:
         acc_entry["points_gained"] = acc_entry["raw_points_earned"]
         return
 
-    # Task completions awards
-    t_pts = 0
     tasks = acc_entry.get("tasks", {})
-    if tasks.get(TASK_DAILY_SET) == "OK":
-        t_pts += 30
-    if tasks.get(TASK_EXPLORE) == "OK":
-        t_pts += 40
-    if tasks.get(TASK_VISUAL) == "OK":
-        t_pts += 5
-    if tasks.get(TASK_MISC) == "OK":
-        t_pts += 20
-    if tasks.get(TASK_BONUS) == "OK":
-        t_pts += 10
+    ok_count = sum(1 for v in tasks.values() if v == "OK")
+    # Informational only: number of tasks reporting OK, not points.
+    acc_entry["task_points"] = ok_count
 
-    # Search quota awards
     s_pts = 0
     init_s = acc_entry.get("initial_points")
     curr_s = acc_entry.get("current_points")
     if curr_s is not None and init_s is not None:
-        s_pts = max(0, curr_s - init_s)
+        try:
+            s_pts = max(0, int(curr_s) - int(init_s))
+        except (TypeError, ValueError):
+            s_pts = 0
 
-    acc_entry["task_points"] = t_pts
-    acc_entry["points_gained"] = t_pts + s_pts
+    acc_entry["points_gained"] = s_pts
 
 
 def parse_log_line(line: str):
@@ -301,6 +493,29 @@ def parse_log_line(line: str):
         raw_val = int(raw_pts_match.group(1))
         acc_entry["raw_points_earned"] = raw_val
         acc_entry["points_gained"] = raw_val
+
+    # Card-level misses inside an otherwise [OK] task. These are the "not
+    # hitting the correct spots" lines, e.g.:
+    #   Explore on Bing Card [desc='...'] is not complete after searching.
+    #   Misc Card [desc='...'] is not complete after clicking.
+    # Track them so the dashboard can show PARTIAL instead of false-OK.
+    if "is not complete after" in line:
+        desc_m = re.search(r"\[desc='([^']+)'\]", line)
+        kind = "Explore card" if "Explore on Bing Card" in line else (
+            "Misc card" if "Misc Card" in line else "Card"
+        )
+        short = desc_m.group(1)[:80] if desc_m else line.strip()[:80]
+        entry = f"{kind}: {short}"
+        warnings = acc_entry.setdefault("warnings", [])
+        if entry not in warnings:
+            warnings.append(entry)
+            # Cap memory: keep most recent 20.
+            del warnings[:-20]
+        acc_entry["incomplete_cards"] = len(warnings)
+        # Demote a false [OK] later? No - upstream emits [OK] after these
+        # warnings, so instead the API/UI uses incomplete_cards to display
+        # "OK with issues". Recalc to keep points honest (search diff only).
+        _recalc_points(acc_entry)
 
     # Task tags: [OK], [SKIP], [FAIL]
     for tag in ["[OK]", "[SKIP]", "[FAIL]"]:
@@ -445,7 +660,12 @@ async def _start_run_locked(accounts: Optional[List[str]] = None) -> Dict[str, A
     env["QUERY_SOURCE"] = config.query_source
     env["REWARDS_ACCOUNTS"] = ",".join(target_accounts)
     env["REWARDS_FARMER_LOG_LEVEL"] = config.log_level
-    env["REWARDS_FARMER_LOG_FILE"] = str(log_file)
+    # NOTE: intentionally NOT setting REWARDS_FARMER_LOG_FILE. Upstream would
+    # then write to both stdout and the file, while this runner tees stdout
+    # to the same file below -> every line duplicated, and print() telemetry
+    # like [POINTS] (which bypasses logging) would still be missing from disk.
+    # Single-writer instead: upstream logs to stdout only, we persist it.
+    env.pop("REWARDS_FARMER_LOG_FILE", None)
     env["LANG"] = "en_US.UTF-8"
     if config.ollama_host:
         env["OLLAMA_HOST"] = config.ollama_host
@@ -454,9 +674,22 @@ async def _start_run_locked(accounts: Optional[List[str]] = None) -> Dict[str, A
     return {"success": True, "message": f"Run started for accounts: {', '.join(target_accounts)}"}
 
 
+def _append_to_log_file(log_file: Path, line: str) -> None:
+    """Best-effort append of one stdout line to the persisted run log."""
+    try:
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
 async def _run_process(env: Dict[str, str], target_accounts: List[str], log_file: Path):
-    await broadcast_line(f"--- [REWARDS-FARMER-SERVER] Starting run for: {', '.join(target_accounts)} ---")
-    await broadcast_line("[NOTE] Running in human-simulation mode (human-like mouse curves & keystroke variance to prevent bot bans). Each task takes 30-90s.")
+    start_marker = f"--- [REWARDS-FARMER-SERVER] Starting run for: {', '.join(target_accounts)} ---"
+    note = "[NOTE] Running in human-simulation mode (human-like mouse curves & keystroke variance to prevent bot bans). Each task takes 30-90s."
+    await broadcast_line(start_marker)
+    await broadcast_line(note)
+    _append_to_log_file(log_file, start_marker)
+    _append_to_log_file(log_file, note)
     await send_webhook("Run Started", f"Accounts: `{', '.join(target_accounts)}`", color=3447003)
 
     wrapper_py = Path(__file__).resolve().parent / "farm_wrapper.py"
@@ -484,11 +717,13 @@ async def _run_process(env: Dict[str, str], target_accounts: List[str], log_file
             line = line_bytes.decode("utf-8", errors="replace").rstrip("\r\n")
             parse_log_line(line)
             await broadcast_line(line)
+            _append_to_log_file(log_file, line)
 
         returncode = await state.process.wait()
     except Exception as exc:
         err_msg = f"[FAIL] Server runner encountered an error: {exc}"
         await broadcast_line(err_msg)
+        _append_to_log_file(log_file, err_msg)
         returncode = -1
 
     end_time = datetime.datetime.now().isoformat()
@@ -513,14 +748,25 @@ async def _run_process(env: Dict[str, str], target_accounts: List[str], log_file
 
     status_str = "Completed successfully" if returncode == 0 else f"Finished with exit code {returncode}"
     
-    # Calculate net points gained during run
-    total_gained = sum(acc.get("points_gained", 0) for acc in state.account_stats.values())
+    # Calculate net points gained during run (raw balance diff when available,
+    # else measured search progress - never inflated task estimates).
+    total_gained = 0
+    total_issues = 0
+    for acc in state.account_stats.values():
+        try:
+            total_gained += int(acc.get("points_gained", 0) or 0)
+        except (TypeError, ValueError):
+            pass
+        total_issues += int(acc.get("incomplete_cards", 0) or 0)
     pts_str = f" (+{total_gained} raw pts earned)" if total_gained > 0 else ""
+    issues_str = f" ({total_issues} card(s) need attention)" if total_issues else ""
 
-    await broadcast_line(f"--- [REWARDS-FARMER-SERVER] Run ended: {status_str} ({duration}){pts_str} ---")
+    end_marker = f"--- [REWARDS-FARMER-SERVER] Run ended: {status_str} ({duration}){pts_str}{issues_str} ---"
+    await broadcast_line(end_marker)
+    _append_to_log_file(log_file, end_marker)
     await send_webhook(
         "Run Finished",
-        f"Status: **{status_str}**\nDuration: `{duration}`{pts_str}\nAccounts: `{', '.join(target_accounts)}`",
+        f"Status: **{status_str}**\nDuration: `{duration}`{pts_str}{issues_str}\nAccounts: `{', '.join(target_accounts)}`",
         color=5763719 if returncode == 0 else 15548997,
     )
 

@@ -34,6 +34,12 @@ class ScheduleConfig(BaseModel):
     cron_hour: int = 3  # For mode == "daily"
     cron_minute: int = 0
     run_on_startup: bool = False
+    # Skip scheduled (not manual) runs when the last run recently finished
+    # with quota complete and 0 earned - the daily cap is hit, another run
+    # right now can only earn 0 and just adds ban-surface. Manual runs always
+    # proceed. Disable if you prefer the old every-tick behaviour.
+    skip_empty_runs: bool = True
+    empty_skip_hours: int = 12
 
     @field_validator("mode")
     @classmethod
@@ -76,6 +82,15 @@ class ScheduleConfig(BaseModel):
         except (TypeError, ValueError):
             return 0
         return min(max(mv, 0), 59)
+
+    @field_validator("empty_skip_hours")
+    @classmethod
+    def _clamp_skip_hours(cls, v: object) -> int:
+        try:
+            hv = int(v)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 12
+        return min(max(hv, 1), 72)
 
 
 class AppConfig(BaseModel):

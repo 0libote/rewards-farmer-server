@@ -75,6 +75,134 @@ def test_raw_balance_overrides_estimate():
     assert state.account_stats["default"]["points_gained"] == 160
 
 
+def test_ok_tasks_without_raw_earn_search_diff_only():
+    """No inflated pre-2026 task estimates: OKs alone earn 0 without raw/diff."""
+    _fresh()
+    parse_log_line("=== account: default ===")
+    parse_log_line("[OK] Bing daily set")
+    parse_log_line("[OK] Explore on Bing")
+    parse_log_line("[OK] Misc cards")
+    assert state.account_stats["default"]["points_gained"] == 0
+    parse_log_line("Search points before: 9/30")
+    parse_log_line("Round 1: 7 searches -> 30/30")
+    assert state.account_stats["default"]["points_gained"] == 21
+
+
+def test_incomplete_card_warnings_tracked():
+    _fresh()
+    parse_log_line("=== account: default ===")
+    parse_log_line(
+        "Explore on Bing Card [desc='Search on Bing to reserve airport parking'] "
+        "is not complete after searching. Please check manually."
+    )
+    parse_log_line(
+        "Misc Card [desc='Download the Bing app now'] is not complete after clicking."
+    )
+    entry = state.account_stats["default"]
+    assert entry["incomplete_cards"] == 2
+    assert any(w.startswith("Explore card") for w in entry["warnings"])
+    assert any(w.startswith("Misc card") for w in entry["warnings"])
+    # Task still OK upstream, but warnings survive the OK line.
+    parse_log_line("[OK] Explore on Bing")
+    assert state.account_stats["default"]["incomplete_cards"] == 2
+    assert state.account_stats["default"]["tasks"]["Explore on Bing"] == "OK"
+
+
+def test_lifetime_stats_not_inflated_by_quota_position(tmp_path, monkeypatch):
+    import datetime as dt
+
+    monkeypatch.setattr(runner, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "HISTORY_FILE", tmp_path / "history.json")
+    now = dt.datetime.now()
+    entry = {
+        "start_time": now.isoformat(),
+        "end_time": now.isoformat(),
+        "duration": "10s",
+        "accounts": ["default"],
+        # 30/30 with 0 gained must count 0, not 30.
+        "stats": {
+            "default": {
+                "search_points": "30/30",
+                "initial_points": 30,
+                "current_points": 30,
+                "max_points": 30,
+                "points_gained": 0,
+            }
+        },
+        "exit_code": 0,
+        "log_file": "run_20250101_030000.log",
+    }
+    runner.save_history_entry(entry)
+    stats = runner.get_lifetime_stats()
+    assert stats["total_points_gained"] == 0
+    assert stats["today_points_gained"] == 0
+
+
+def test_smart_skip_when_quota_complete_and_empty(tmp_path, monkeypatch):
+    import datetime as dt
+
+    monkeypatch.setattr(runner, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "HISTORY_FILE", tmp_path / "history.json")
+    now = dt.datetime.now()
+    entry = {
+        "start_time": (now - dt.timedelta(hours=1)).isoformat(),
+        "end_time": (now - dt.timedelta(minutes=50)).isoformat(),
+        "duration": "10s",
+        "accounts": ["default"],
+        "stats": {
+            "default": {
+                "search_points": "30/30",
+                "initial_points": 30,
+                "current_points": 30,
+                "max_points": 30,
+                "points_gained": 0,
+            }
+        },
+        "exit_code": 0,
+        "log_file": "run_20250101_030000.log",
+    }
+    runner.save_history_entry(entry)
+    decision = runner.should_skip_scheduled_run(now=now)
+    assert decision["skip"] is True
+
+    # A run that earned points must not skip.
+    entry["stats"]["default"]["points_gained"] = 60
+    runner.save_history_entry(entry)
+    decision2 = runner.should_skip_scheduled_run(now=now)
+    assert decision2["skip"] is False
+
+
+def test_diagnostics_flags_visual_skip_and_empty(tmp_path, monkeypatch):
+    import datetime as dt
+
+    monkeypatch.setattr(runner, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "HISTORY_FILE", tmp_path / "history.json")
+    now = dt.datetime.now()
+    for i in range(3):
+        runner.save_history_entry(
+            {
+                "start_time": (now - dt.timedelta(hours=i)).isoformat(),
+                "end_time": (now - dt.timedelta(hours=i)).isoformat(),
+                "duration": "10s",
+                "accounts": ["default"],
+                "stats": {
+                    "default": {
+                        "tasks": {"Visual search": "SKIP"},
+                        "search_points": "30/30",
+                        "points_gained": 0,
+                        "warnings": [],
+                    }
+                },
+                "exit_code": 0,
+                "log_file": f"run_2025010{i}_030000.log",
+            }
+        )
+    diag = runner.get_diagnostics()
+    assert diag["visual_skip_recent"] == 3
+    assert diag["empty_runs_recent"] == 3
+    assert any("Visual search" in s for s in diag["suggestions"])
+
+
 def test_prune_keeps_newest_logs(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "LOGS_DIR", tmp_path)
     for i in range(35):

@@ -13,6 +13,15 @@ event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 async def _run_scheduled():
     """Scheduler entrypoint: skips quietly if a run is already active."""
+    try:
+        from server.runner import should_skip_scheduled_run
+
+        decision = should_skip_scheduled_run()
+        if decision.get("skip"):
+            print(f"[SCHEDULER] Skipping empty scheduled run: {decision.get('reason')}")
+            return
+    except Exception as exc:
+        print(f"[SCHEDULER] Smart-skip check failed, proceeding anyway: {exc}")
     result = await start_run()
     if not result.get("success"):
         print(f"[SCHEDULER] Scheduled run skipped: {result.get('error')}")
@@ -150,4 +159,6 @@ def get_schedule_info() -> Dict[str, Any]:
         "cron_minute": sched.cron_minute,
         "description": desc,
         "next_run": next_run,
+        "skip_empty_runs": bool(getattr(sched, "skip_empty_runs", True)),
+        "empty_skip_hours": int(getattr(sched, "empty_skip_hours", 12) or 12),
     }

@@ -204,6 +204,19 @@
       </div>
     </div>
 
+    <!-- MISS-PATTERN DIAGNOSTICS -->
+    <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-sm">
+      <div class="flex items-center justify-between mb-2">
+        <div class="flex items-center space-x-2">
+          <i data-lucide="stethoscope" class="w-4 h-4 text-cyan-400"></i>
+          <h2 class="text-base font-bold text-white">Miss-Pattern Diagnostics</h2>
+        </div>
+        <button onclick="loadDiagnostics()" class="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg border border-zinc-700 transition">Refresh</button>
+      </div>
+      <p class="text-xs text-zinc-400 mb-3">Aggregated from recent run history - no browser launched. Paste into an upstream issue when selectors miss.</p>
+      <div id="diagnostics-container" class="text-xs text-zinc-500">Loading diagnostics...</div>
+    </div>
+
     <!-- LIVE CONSOLE LOGS -->
     <div class="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-sm flex flex-col">
       <div class="px-4 py-3 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between">
@@ -352,6 +365,15 @@
             <input type="checkbox" id="cfg-sched-startup" class="rounded bg-zinc-800 border-zinc-700 text-emerald-600 focus:ring-0">
             <span>Run once shortly after server startup</span>
           </label>
+          <label class="flex items-center space-x-2 text-zinc-300 cursor-pointer mt-2">
+            <input type="checkbox" id="cfg-sched-skip-empty" class="rounded bg-zinc-800 border-zinc-700 text-emerald-600 focus:ring-0">
+            <span>Smart-skip scheduled runs when quota already complete (manual runs always work)</span>
+          </label>
+          <div class="flex items-center space-x-2 mt-2 text-zinc-400">
+            <span>Skip window:</span>
+            <input type="number" id="cfg-sched-skip-hours" aria-label="Skip window in hours" min="1" max="72" value="12" class="w-20 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-center text-zinc-200">
+            <span class="text-zinc-500">hour(s) after a 0-pt quota-complete run</span>
+          </div>
         </div>
 
         <div class="border-t border-zinc-800 pt-3">
@@ -469,6 +491,41 @@
       }
     }
 
+    async function loadDiagnostics() {
+      const el = document.getElementById('diagnostics-container');
+      try {
+        const res = await fetch('/api/diagnostics');
+        const d = await res.json();
+        const rows = [
+          ['Runs analyzed', `${d.recent_runs_analyzed} recent / ${d.total_runs_analyzed} total`],
+          ['Visual SKIP', `${d.visual_skip_recent}/${d.recent_runs_analyzed} recent runs`],
+          ['Explore OK with cards missed', `${d.explore_ok_with_issues_recent}/${d.recent_runs_analyzed} recent runs`],
+          ['Empty (0-pt) runs', `${d.empty_runs_recent}/${d.recent_runs_analyzed} recent runs`],
+          ['Smart-skip', d.smart_skip && d.smart_skip.skip ? `would skip next scheduled run (${escapeHtml(d.smart_skip.reason || '')})` : `would run (${escapeHtml((d.smart_skip && d.smart_skip.reason) || 'quota open')})`],
+        ];
+        let html = `<div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-3">` + rows.map(([k, v]) =>
+          `<div class="bg-zinc-950 border border-zinc-800 rounded-lg p-2"><div class="text-[10px] uppercase text-zinc-500 font-semibold">${escapeHtml(k)}</div><div class="text-zinc-200 font-mono text-[11px] mt-0.5">${v}</div></div>`
+        ).join('') + `</div>`;
+        if (d.explore_examples && d.explore_examples.length) {
+          html += `<div class="text-[11px] text-zinc-400 mb-1 font-semibold">Explore cards missed recently:</div><ul class="list-disc ml-5 mb-2 text-[11px] text-amber-200/80">` +
+            d.explore_examples.map(e => `<li>${escapeHtml(e)}</li>`).join('') + `</ul>`;
+        }
+        if (d.misc_examples && d.misc_examples.length) {
+          html += `<div class="text-[11px] text-zinc-400 mb-1 font-semibold">Misc cards missed recently:</div><ul class="list-disc ml-5 mb-2 text-[11px] text-amber-200/80">` +
+            d.misc_examples.map(e => `<li>${escapeHtml(e)}</li>`).join('') + `</ul>`;
+        }
+        if (d.suggestions && d.suggestions.length) {
+          html += `<div class="text-[11px] text-zinc-400 mb-1 font-semibold">Next steps:</div><ul class="space-y-1">` +
+            d.suggestions.map(s => `<li class="bg-cyan-950/40 border border-cyan-800/40 text-cyan-200 rounded-lg p-2 text-[11px]">${escapeHtml(s)}</li>`).join('') + `</ul>`;
+        } else {
+          html += `<div class="text-[11px] text-emerald-400">No systematic misses in recent runs.</div>`;
+        }
+        el.innerHTML = html;
+      } catch (err) {
+        el.textContent = 'Diagnostics unavailable: ' + err;
+      }
+    }
+
     function renderStatus(data) {
       // 1. Runner State & Indicators
       const isRunning = data.runner.is_running;
@@ -581,8 +638,9 @@
 
       // 5. Schedule & Query Backend
       const sched = data.scheduler || {};
-      document.getElementById('stat-schedule').textContent = sched.enabled ?
-        (sched.description || 'Scheduled') : 'Disabled';
+      let schedText = sched.enabled ? (sched.description || 'Scheduled') : 'Disabled';
+      if (sched.enabled && sched.skip_empty_runs) schedText += ' • smart-skip on';
+      document.getElementById('stat-schedule').textContent = schedText;
       document.getElementById('stat-query-source').textContent = `${data.query_source || 'trends'} backend`;
       document.getElementById('stat-visual-img').textContent = data.visual_search_ready ? 'visual_search.jpg ready' : 'Missing image';
       document.getElementById('stat-visual-img').className = data.visual_search_ready ? 'text-[11px] text-emerald-400 font-medium' : 'text-[11px] text-amber-400 font-medium';
@@ -617,6 +675,8 @@
         const auth = accountStatuses[account] || { logged_in: false, reason: "Checking..." };
         const isLoggedIn = auth.logged_in;
         const gained = stats.points_gained || 0;
+        const warnings = stats.warnings || [];
+        const incomplete = stats.incomplete_cards || warnings.length || 0;
         const safeAccount = escapeHtml(account);
         const jsAccount = escapeJsString(account);
         const profilePath = `Profile: data-dir/${account === 'default' ? '' : account}`;
@@ -677,6 +737,18 @@
               </div>
             ` : ''}
 
+            <!-- Card-level misses inside [OK] tasks -->
+            ${incomplete > 0 ? `
+              <div class="p-2 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-300 space-y-1">
+                <div class="flex items-center space-x-1.5 font-semibold">
+                  <i data-lucide="alert-triangle" class="w-3.5 h-3.5 shrink-0"></i>
+                  <span>${incomplete} card(s) searched but not cleared - points may be missed</span>
+                </div>
+                ${warnings.slice(0, 2).map(w => `<div class="text-[11px] text-amber-200/80 truncate" title="${escapeHtml(w)}">• ${escapeHtml(w)}</div>`).join('')}
+                ${warnings.length > 2 ? `<div class="text-[11px] text-amber-200/60">+${warnings.length - 2} more (see log)</div>` : ''}
+              </div>
+            ` : ''}
+
             <!-- Points & Task Pills -->
             <div class="pt-2 border-t border-zinc-900 grid grid-cols-2 gap-2 text-xs">
               <div class="bg-zinc-900/80 p-2 rounded-lg border border-zinc-800">
@@ -689,10 +761,10 @@
               <div class="bg-zinc-900/80 p-2 rounded-lg border border-zinc-800 flex items-center justify-between">
                 <div>
                   <span class="text-zinc-500 text-[10px] block uppercase font-medium">Tasks Progress</span>
-                  <span class="text-[10px] text-zinc-400">${countCompletedTasks(tasks)} / 6 steps</span>
+                  <span class="text-[10px] text-zinc-400">${countCompletedTasks(tasks)} / 6 OK${incomplete > 0 ? ` • ${incomplete} ⚠` : ''}</span>
                 </div>
                 <div class="flex space-x-1">
-                  ${renderTaskBadges(tasks)}
+                  ${renderTaskBadges(tasks, incomplete)}
                 </div>
               </div>
             </div>
@@ -704,22 +776,27 @@
     }
 
     function countCompletedTasks(tasks) {
-      return Object.values(tasks).filter(v => v === 'OK' || v === 'SKIP').length;
+      // Only true OK counts. SKIP means "variant doesn't ship this task" -
+      // correct, but not completed work. Counting it hid misses.
+      return Object.values(tasks).filter(v => v === 'OK').length;
     }
 
     function alertNotLoggedIn(account) {
       alert(`Account '${account}' is not logged in yet.\n\nPlease click 'Interactive Login' first to sign in with your Microsoft account.`);
     }
 
-    function renderTaskBadges(tasks) {
+    function renderTaskBadges(tasks, incomplete = 0) {
       const taskKeys = ["Bing daily set", "Explore on Bing", "Visual search", "Misc cards", "Required searches", "Bonus points"];
       return taskKeys.map(k => {
         const val = tasks[k];
         let color = "bg-zinc-800 text-zinc-600";
-        if (val === "OK") color = "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40";
+        // OK-with-card-issues shows amber ring so false-green disappears.
+        if (val === "OK" && incomplete > 0 && (k === "Explore on Bing" || k === "Misc cards")) color = "bg-amber-500/30 text-amber-300 border border-amber-400/60";
+        else if (val === "OK") color = "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40";
         else if (val === "SKIP") color = "bg-amber-500/20 text-amber-400 border border-amber-500/40";
         else if (val === "FAIL") color = "bg-rose-500/20 text-rose-400 border border-rose-500/40";
-        return `<span class="w-2.5 h-2.5 rounded-full ${color}" title="${k}: ${val || 'Pending'}"></span>`;
+        const suffix = (val === "OK" && incomplete > 0 && (k === "Explore on Bing" || k === "Misc cards")) ? " (OK, but cards missed)" : "";
+        return `<span class="w-2.5 h-2.5 rounded-full ${color}" title="${k}: ${val || 'Pending'}${suffix}"></span>`;
       }).join('');
     }
 
@@ -929,6 +1006,8 @@
         document.getElementById('cfg-sched-interval-hours').value = sched.interval_hours ?? 6;
         document.getElementById('cfg-sched-custom-times').value = (sched.custom_times || ['03:00', '15:00']).join(', ');
         document.getElementById('cfg-sched-startup').checked = sched.run_on_startup ?? false;
+        document.getElementById('cfg-sched-skip-empty').checked = sched.skip_empty_runs ?? true;
+        document.getElementById('cfg-sched-skip-hours').value = sched.empty_skip_hours ?? 12;
         document.getElementById('cfg-auto-update').checked = cfg.auto_update_upstream ?? true;
         document.getElementById('cfg-webhook').value = cfg.webhook_url || '';
         document.getElementById('cfg-log-level').value = cfg.log_level || 'INFO';
@@ -967,7 +1046,9 @@
           cron_minute: Number.parseInt(document.getElementById('cfg-sched-min').value) || 0,
           interval_hours: Number.parseInt(document.getElementById('cfg-sched-interval-hours').value) || prevSchedule.interval_hours || 6,
           custom_times: customTimes.length > 0 ? customTimes : (prevSchedule.custom_times || ['03:00']),
-          run_on_startup: document.getElementById('cfg-sched-startup').checked
+          run_on_startup: document.getElementById('cfg-sched-startup').checked,
+          skip_empty_runs: document.getElementById('cfg-sched-skip-empty').checked,
+          empty_skip_hours: Number.parseInt(document.getElementById('cfg-sched-skip-hours').value) || prevSchedule.empty_skip_hours || 12
         }
       };
 
@@ -1069,7 +1150,10 @@
         line = line + "  (Region/UI variant does not have this task - continuing normally)";
       } else if (line.includes('is not complete after searching')) {
         div.className = 'text-amber-300/80';
-        line = line + "  (Note: Microsoft backend delayed crediting this card)";
+        line = line + "  (Card search counted toward quota but did not clear the card - see Diagnostics)";
+      } else if (line.includes('is not complete after clicking')) {
+        div.className = 'text-amber-300/80';
+        line = line + "  (Promo/app cards can't complete headless - expected)";
       } else if (line.includes('Search points before:') || line.includes('Round ') || line.includes('Search quota complete:')) {
         div.className = 'text-amber-300 font-bold';
       } else if (line.includes('=== account:')) {
@@ -1098,8 +1182,10 @@
     // Poll status & init (skip background-tab polls to reduce server load)
     setInterval(() => { if (!document.hidden) loadStatus(); }, 3000);
     setInterval(() => { if (!document.hidden) loadHistory(); }, 15000);
+    setInterval(() => { if (!document.hidden) loadDiagnostics(); }, 30000);
     loadStatus();
     loadHistory();
+    loadDiagnostics();
     connectWebSocket();
   </script>
 </body>

@@ -35,6 +35,8 @@ from server.runner import (
     stop_run,
     get_history,
     get_lifetime_stats,
+    get_diagnostics,
+    should_skip_scheduled_run,
     is_safe_log_filename,
     log_subscribers,
     LOGS_DIR,
@@ -187,6 +189,17 @@ async def trigger_stop():
 @app.get("/api/history")
 async def fetch_history():
     return await asyncio.to_thread(get_history)
+
+
+@app.get("/api/diagnostics")
+async def fetch_diagnostics():
+    """Aggregated miss-patterns across recent runs: visual SKIP rate, explore
+    cards incomplete after searching, empty-run rate, plus next steps. No
+    browser is launched; purely history analysis so it is safe anytime."""
+    diag = await asyncio.to_thread(get_diagnostics)
+    skip = await asyncio.to_thread(should_skip_scheduled_run)
+    diag["smart_skip"] = skip
+    return diag
 
 
 @app.get("/api/logs/{filename}", responses={404: _ERROR_404})
