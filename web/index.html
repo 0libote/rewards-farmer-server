@@ -598,12 +598,13 @@
         const d = await res.json();
         const rows = [
           ['Runs analyzed', `${d.recent_runs_analyzed} recent / ${d.total_runs_analyzed} total`],
+          ['Tasks OK', `${d.tasks_ok_recent ?? 0}/${d.tasks_seen_recent ?? 0} recent`],
           ['Visual SKIP', `${d.visual_skip_recent}/${d.recent_runs_analyzed} recent runs`],
           ['Explore OK with cards missed', `${d.explore_ok_with_issues_recent}/${d.recent_runs_analyzed} recent runs`],
           ['Empty (0-pt) runs', `${d.empty_runs_recent}/${d.recent_runs_analyzed} recent runs`],
           ['Smart-skip', d.smart_skip && d.smart_skip.skip ? `would skip next scheduled run (${escapeHtml(d.smart_skip.reason || '')})` : `would run (${escapeHtml((d.smart_skip && d.smart_skip.reason) || 'quota open')})`],
         ];
-        let html = `<div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-3">` + rows.map(([k, v]) =>
+        let html = `<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 mb-3">` + rows.map(([k, v]) =>
           `<div class="bg-zinc-950 border border-zinc-800 rounded-lg p-2"><div class="text-[10px] uppercase text-zinc-500 font-semibold">${escapeHtml(k)}</div><div class="text-zinc-200 font-mono text-[11px] mt-0.5">${v}</div></div>`
         ).join('') + `</div>`;
         if (d.explore_examples && d.explore_examples.length) {
@@ -910,6 +911,15 @@
       tbody.innerHTML = history.slice(0, 10).map(run => {
         const isSuccess = run.exit_code === 0;
         const dateStr = new Date(run.start_time).toLocaleString();
+        const counts = run.task_counts || {};
+        const okCount = counts.ok || 0;
+        const totalTasks = (counts.ok || 0) + (counts.skip || 0) + (counts.fail || 0);
+        // Upstream exits 0 whenever the browser started, even if every task
+        // skipped. Surface "No tasks OK" instead of a misleading green Success.
+        const noWork = isSuccess && totalTasks > 0 && okCount === 0;
+        const statusLabel = !isSuccess ? 'Exit Code ' + run.exit_code : (noWork ? 'No tasks OK' : 'Success');
+        const statusClass = !isSuccess ? 'bg-rose-500/20 text-rose-400' : (noWork ? 'bg-amber-500/20 text-amber-400' : 'bg-emerald-500/20 text-emerald-400');
+        const statusTitle = totalTasks > 0 ? `OK ${counts.ok || 0}, SKIP ${counts.skip || 0}, FAIL ${counts.fail || 0}` : '';
         
         let ptsGainedTotal = 0;
         const statsSummaries = Object.entries(run.stats || {}).map(([acc, st]) => {
@@ -930,8 +940,8 @@
             <td class="py-2.5 px-3 font-medium text-white">${escapeHtml((run.accounts || []).join(', '))}</td>
             <td class="py-2.5 px-3 text-zinc-400">${escapeHtml(run.duration || '-')}</td>
             <td class="py-2.5 px-3">
-              <span class="px-2 py-0.5 rounded text-[10px] font-bold ${isSuccess ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}">
-                ${isSuccess ? 'Success' : 'Exit Code ' + escapeHtml(String(run.exit_code))}
+              <span class="px-2 py-0.5 rounded text-[10px] font-bold ${statusClass}" title="${escapeHtml(statusTitle)}">
+                ${escapeHtml(statusLabel)}
               </span>
             </td>
             <td class="py-2.5 px-3 font-mono text-zinc-300">

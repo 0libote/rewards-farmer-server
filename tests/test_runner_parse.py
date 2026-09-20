@@ -202,7 +202,38 @@ def test_diagnostics_flags_visual_skip_and_empty(tmp_path, monkeypatch):
     diag = runner.get_diagnostics()
     assert diag["visual_skip_recent"] == 3
     assert diag["empty_runs_recent"] == 3
+    assert diag["tasks_ok_recent"] == 0
+    assert diag["tasks_seen_recent"] == 3
     assert any("Visual search" in s for s in diag["suggestions"])
+    # Nothing reported [OK], so the "selectors changed" hint must fire too.
+    assert any("No task reported [OK]" in s for s in diag["suggestions"])
+
+
+def test_diagnostics_no_ok_hint_absent_when_a_task_succeeds(tmp_path, monkeypatch):
+    import datetime as dt
+
+    monkeypatch.setattr(runner, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "HISTORY_FILE", tmp_path / "history.json")
+    now = dt.datetime.now()
+    runner.save_history_entry(
+        {
+            "start_time": now.isoformat(),
+            "end_time": now.isoformat(),
+            "duration": "10s",
+            "accounts": ["default"],
+            "stats": {
+                "default": {
+                    "tasks": {"Bing daily set": "OK", "Visual search": "SKIP"},
+                    "points_gained": 30,
+                }
+            },
+            "exit_code": 0,
+            "log_file": "run_20250101_030000.log",
+        }
+    )
+    diag = runner.get_diagnostics()
+    assert diag["tasks_ok_recent"] == 1
+    assert not any("No task reported [OK]" in s for s in diag["suggestions"])
 
 
 def test_prune_keeps_newest_logs(tmp_path, monkeypatch):

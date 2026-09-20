@@ -272,6 +272,8 @@ def get_diagnostics() -> Dict[str, Any]:
     empty_runs = 0
     quota_complete_runs = 0
     account_entries = 0
+    tasks_ok_recent = 0
+    tasks_seen_recent = 0
     accounts_seen: List[str] = []
     for r in recent:
         stats = r.get("stats", {}) or {}
@@ -289,6 +291,11 @@ def get_diagnostics() -> Dict[str, Any]:
             warns = st.get("warnings") or []
             has_explore_warn = any(str(w).startswith("Explore card") for w in warns)
             tasks = st.get("tasks") or {}
+            for value in tasks.values():
+                if value in ("OK", "SKIP", "FAIL"):
+                    tasks_seen_recent += 1
+                    if value == "OK":
+                        tasks_ok_recent += 1
             if tasks.get(TASK_EXPLORE) == "OK" and has_explore_warn:
                 explore_ok_with_issues += 1
             for w in warns:
@@ -310,6 +317,13 @@ def get_diagnostics() -> Dict[str, Any]:
             empty_runs += 1
 
     suggestions: List[str] = []
+    if recent and tasks_seen_recent and tasks_ok_recent == 0:
+        suggestions.append(
+            "No task reported [OK] in any recent run. If you are signed in on "
+            "rewards.bing.com, this usually means upstream's selectors no longer "
+            "match your UI variant (every task SKIPs). Click 'Pull Latest' to get "
+            "selector fixes, then open the run log to see the per-task reasons."
+        )
     if recent and account_entries and visual_skip == account_entries:
         suggestions.append(
             "Visual search SKIP on every recent run: this market variant has no "
@@ -350,6 +364,8 @@ def get_diagnostics() -> Dict[str, Any]:
         "visual_skip_recent": visual_skip,
         "explore_ok_with_issues_recent": explore_ok_with_issues,
         "empty_runs_recent": empty_runs,
+        "tasks_ok_recent": tasks_ok_recent,
+        "tasks_seen_recent": tasks_seen_recent,
         "explore_examples": explore_warn_examples,
         "misc_examples": misc_warn_examples,
         "suggestions": suggestions,
@@ -777,12 +793,25 @@ async def _run_process(env: Dict[str, str], target_accounts: List[str], log_file
     except Exception:
         pass
 
+    # Task outcome counts: exit code alone cannot tell "did nothing" from
+    # "worked", since upstream exits 0 as long as the browser started.
+    task_counts = {"ok": 0, "skip": 0, "fail": 0}
+    for acc in state.account_stats.values():
+        for value in (acc.get("tasks") or {}).values():
+            if value == "OK":
+                task_counts["ok"] += 1
+            elif value == "SKIP":
+                task_counts["skip"] += 1
+            elif value == "FAIL":
+                task_counts["fail"] += 1
+
     summary_entry = {
         "start_time": state.start_time,
         "end_time": end_time,
         "duration": duration,
         "accounts": target_accounts,
         "stats": state.account_stats,
+        "task_counts": task_counts,
         "exit_code": returncode,
         "log_file": log_file.name,
     }
@@ -802,14 +831,18 @@ async def _run_process(env: Dict[str, str], target_accounts: List[str], log_file
         total_issues += int(acc.get("incomplete_cards", 0) or 0)
     pts_str = f" (+{total_gained} raw pts earned)" if total_gained > 0 else ""
     issues_str = f" ({total_issues} card(s) need attention)" if total_issues else ""
+    tasks_str = f" [OK {task_counts['ok']}, SKIP {task_counts['skip']}, FAIL {task_counts['fail']}]"
 
-    end_marker = f"--- [REWARDS-FARMER-SERVER] Run ended: {status_str} ({duration}){pts_str}{issues_str} ---"
+    if returncode == 0 and task_counts["ok"] == 0:
+        status_str = "Completed but no tasks succeeded"
+
+    end_marker = f"--- [REWARDS-FARMER-SERVER] Run ended: {status_str} ({duration}){pts_str}{issues_str}{tasks_str} ---"
     await broadcast_line(end_marker)
     _append_to_log_file(log_file, end_marker)
     await send_webhook(
         "Run Finished",
-        f"Status: **{status_str}**\nDuration: `{duration}`{pts_str}{issues_str}\nAccounts: `{', '.join(target_accounts)}`",
-        color=5763719 if returncode == 0 else 15548997,
+        f"Status: **{status_str}**\nDuration: `{duration}`{pts_str}{issues_str}{tasks_str}\nAccounts: `{', '.join(target_accounts)}`",
+        color=5763719 if returncode == 0 and task_counts["ok"] > 0 else 15548997,
     )
 
     state.is_running = False

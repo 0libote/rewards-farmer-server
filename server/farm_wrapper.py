@@ -3,7 +3,6 @@
 Runs upstream rewards-farmer without modifying any upstream files,
 measuring total Microsoft Rewards points balance before and after the run.
 """
-import re
 import sys
 import time
 from pathlib import Path
@@ -16,6 +15,13 @@ if not UPSTREAM_SRC.exists():
 
 if UPSTREAM_SRC.exists():
     sys.path.insert(0, str(UPSTREAM_SRC))
+
+# This file is executed as a script with its own directory as sys.path[0], but
+# be explicit so the balance probe is importable either way.
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from balance_probe import extract_account_balance
 
 try:
     import rewards_tasks
@@ -31,91 +37,29 @@ except ImportError as e:
     raise
 
 
-def extract_account_balance(driver, attempts: int = 3) -> int | None:
-    """Extract total Microsoft Rewards point balance from the dashboard.
+# Wrap RewardsTaskUtils.complete_all_tasks to record raw balance.
+# Fail loudly and specifically if upstream renamed the hook, instead of a bare
+# AttributeError traceback that reads like a wrapper bug.
+_original_complete_all = getattr(
+    getattr(rewards_tasks, "RewardsTaskUtils", None), "complete_all_tasks", None
+)
+if _original_complete_all is None:
+    print(
+        "[FARM_WRAPPER] Upstream RewardsTaskUtils.complete_all_tasks was not found; "
+        "the upstream layout changed. Try 'Pull Latest' or update the wrapper.",
+        file=sys.stderr,
+        flush=True,
+    )
+    raise SystemExit(3)
 
-    Retries with small backoff: the React header hydrates progressively and a
-    single 1.5s snapshot regularly reads the pre-hydration DOM (empty) and
-    reports None, leaving history with null balances.
-    """
-    js_candidates = [
-        # 1. Header / points / balance elements with a bare number.
-        """
-        try {
-            for (let el of document.querySelectorAll('header *, [class*="points"], [id*="points"], [class*="balance"], [class*="status"]')) {
-                let txt = (el.innerText || el.textContent || '').trim();
-                if (/^[0-9]{1,3}(,[0-9]{3})*$/.test(txt)) {
-                    let val = parseInt(txt.replace(/,/g, ''), 10);
-                    if (val >= 0 && val < 5000000) return val;
-                }
-            }
-        } catch(e) {}
-        return null;
-        """,
-        # 2. aria-labels like "Available points 4,491" on the rewards flyout.
-        """
-        try {
-            let els = document.querySelectorAll('[aria-label*="point" i], [title*="point" i]');
-            for (let el of els) {
-                let txt = ((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || '') + ' ' + (el.innerText || '')).trim();
-                let m = txt.match(/([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)/);
-                if (m) {
-                    let val = parseInt(m[1].replace(/,/g, ''), 10);
-                    if (val >= 0 && val < 5000000) return val;
-                }
-            }
-        } catch(e) {}
-        return null;
-        """,
-        # 3. Any "4,491 points" occurrence in rendered text.
-        """
-        try {
-            let txt = document.body ? (document.body.innerText || '') : '';
-            let m = txt.match(/([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{2,})\\s*points/i);
-            if (m) {
-                let val = parseInt(m[1].replace(/,/g, ''), 10);
-                if (val >= 0 && val < 5000000) return val;
-            }
-        } catch(e) {}
-        return null;
-        """,
-    ]
-
-    for attempt in range(attempts):
-        for js_code in js_candidates:
-            try:
-                val = driver.execute_script(js_code)
-                if isinstance(val, int) and 0 <= val < 5000000:
-                    return val
-                # Selenium may return floats/longs for JS numbers.
-                if isinstance(val, float) and val.is_integer() and 0 <= val < 5000000:
-                    return int(val)
-            except Exception:
-                continue
-
-        try:
-            # 4. Text regex on body as last resort.
-            body_text = driver.find_element("tag name", "body").text or ""
-            for pat in (
-                r"(?:available\s*points|total\s*points|your\s*points|rewards\s*points)[:\s]*([0-9,]+)",
-                r"([0-9]{1,3}(?:,[0-9]{3})+)\s*points",
-            ):
-                m = re.search(pat, body_text, re.IGNORECASE)
-                if m:
-                    val = int(m.group(1).replace(",", ""))
-                    if 0 <= val < 5000000:
-                        return val
-        except Exception:
-            pass
-
-        if attempt < attempts - 1:
-            time.sleep(2)
-
-    return None
+original_complete_all = _original_complete_all
 
 
-# Wrap RewardsTaskUtils.complete_all_tasks to record raw balance
-original_complete_all = rewards_tasks.RewardsTaskUtils.complete_all_tasks
+def _report_balance(label: str, value: int | None) -> None:
+    if value is not None:
+        print(f"[POINTS] Balance {label}: {value} pts", flush=True)
+    else:
+        print(f"[POINTS] Balance {label}: unavailable (not signed in or header not hydrated)", flush=True)
 
 
 def instrumented_complete_all(self):
@@ -125,10 +69,7 @@ def instrumented_complete_all(self):
         # the extractor rather than a single snapshot.
         time.sleep(3)
         balance_before = extract_account_balance(self.driver)
-        if balance_before is not None:
-            print(f"[POINTS] Balance before run: {balance_before} pts", flush=True)
-        else:
-            print("[POINTS] Balance before run: unavailable (header not hydrated)", flush=True)
+        _report_balance("before run", balance_before)
     except Exception as exc:
         print(f"[POINTS] Balance-before check failed: {exc}", flush=True)
 
@@ -159,7 +100,7 @@ def instrumented_complete_all(self):
                     else:
                         print("[POINTS] Raw points earned this run: unknown (no before-balance)", flush=True)
                 else:
-                    print("[POINTS] Balance after run: unavailable (header not hydrated)", flush=True)
+                    print("[POINTS] Balance after run: unavailable (not signed in or header not hydrated)", flush=True)
         except Exception as exc:
             print(f"[POINTS] Balance-after check failed: {exc}", flush=True)
 
