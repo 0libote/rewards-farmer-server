@@ -17,6 +17,8 @@ Designed specifically for headless Docker servers (VPS, Synology, Unraid, TrueNA
 - 🔔 **Webhook Notifications**: Discord alerts (other generic webhook receivers get a plain-text fallback) when daily runs start, complete, or fail.
 - 🖼️ **Visual Search Image Tool**: Automatically fetches Wikimedia images via upstream's `random_image_for_visual_search.py` or allows uploading a custom image.
 - 📝 **Seed Wordlist Editor**: View and customize `nouns.txt` directly from the web settings.
+- 🔒 **Optional Token Authentication**: Set `DASHBOARD_TOKEN` to lock the dashboard, API and interactive login behind an access token (HttpOnly cookie session).
+- 📴 **Fully Offline Dashboard**: Tailwind and Lucide are vendored locally, so the UI loads with no internet access and no third-party CDN at runtime.
 - 📦 **Automated GHCR Package**: Automatically built and published as a Docker container package (`ghcr.io/0libote/rewards-farmer-server:latest`) on every commit.
 
 ---
@@ -34,8 +36,11 @@ services:
     restart: unless-stopped
     shm_size: 2gb
     ports:
-      - "8345:8345" # Web Dashboard
-      - "6345:6345" # Interactive Browser Login (noVNC)
+      - "8345:8345" # Web Dashboard (interactive login is proxied at /vnc)
+      - "6345:6345" # Optional: direct noVNC access
+    environment:
+      # Optional but recommended: require a token for the dashboard/API/login
+      - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-}
     volumes:
       - ./data:/app/data
 ```
@@ -90,16 +95,22 @@ data/
 
 | Port | Protocol | Description |
 |------|----------|-------------|
-| `8345` | HTTP / WebSocket | Main Web Dashboard, REST API & live log terminal |
-| `6345` | HTTP / WebSocket | Interactive Browser Login (noVNC stream) |
+| `8345` | HTTP / WebSocket | Main Web Dashboard, REST API, live log terminal & proxied interactive login (`/vnc`) |
+| `6345` | HTTP / WebSocket | Interactive Browser Login (noVNC) — **optional** now that the dashboard proxies it |
 
-> ⚠️ The noVNC stream on `6345` has no password. On remote servers, bind it to localhost (`127.0.0.1:6345:6345`) and reach it via an SSH tunnel or authenticated reverse proxy instead of exposing it publicly.
+> 🔒 **Authentication**: set `DASHBOARD_TOKEN` (environment variable or `.env`) to require a token for the dashboard, API and interactive login. When unset the dashboard is open, so on a shared or internet-facing host you should set it. The token is entered once in the browser and stored in an HttpOnly cookie.
+>
+> The direct noVNC port `6345` has no password of its own. Since the dashboard now proxies the interactive login through `/vnc`, you can drop the `6345` mapping entirely (or bind it to `127.0.0.1`).
 
 Settings can be changed directly in the **Web Dashboard** under the Settings modal (⚙️):
-- **Search Query Backend**: Choose between `trends` (default, zero setup using Google/Bing trends and Wikipedia) or `llm` (Ollama LLM).
-- **Ollama Host**: Address to reach your Ollama instance (e.g. `host.docker.internal:11434`).
+- **Search Query Backend**: Choose between `trends` (default, zero setup using Google/Bing trends and Wikipedia) or `llm`.
+- **LLM Provider**: `local` (any Ollama-compatible `/v1` endpoint) or `openrouter`.
+- **LLM Base URL**: e.g. `http://host.docker.internal:11434/v1` for local, or the OpenRouter API base.
+- **LLM Model / API Key**: model name and optional key for the chosen provider.
 - **Automated Schedule**: Daily at a fixed UTC time, every N hours, or at multiple custom UTC times — plus an optional run shortly after startup.
 - **Webhook URL**: Discord webhook URL to receive status notifications (generic receivers get a plain-text fallback).
+
+> ℹ️ The LLM settings map onto upstream's `LLM_PROVIDER`, `LOCAL_LLM_*` and `OPENROUTER_*` environment variables. Older `ollama_host` values are still honoured as a fallback base URL.
 
 A `/api/health` endpoint (also at `/health`) is available for container healthchecks and uptime monitoring. Past run logs are kept under `./data/logs` (newest 30 files) and can be opened from the **Recent Run History** table or via `/api/logs/{filename}`.
 

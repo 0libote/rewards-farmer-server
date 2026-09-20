@@ -3,7 +3,6 @@
 Runs upstream rewards-farmer without modifying any upstream files,
 measuring total Microsoft Rewards points balance before and after the run.
 """
-import os
 import re
 import sys
 import time

@@ -3,6 +3,10 @@ selenium>=4.46.0,<5.0.0
 numpy
 requests
 pillow
+# main.py imports dotenv at module scope; uvicorn[standard] happens to pull it
+# in, but pin it explicitly so the upstream import cannot break on a uvicorn
+# change.
+python-dotenv>=1.0.0
 
 # Server & Dashboard dependencies
 fastapi>=0.110.0

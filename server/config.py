@@ -96,11 +96,24 @@ class ScheduleConfig(BaseModel):
 class AppConfig(BaseModel):
     accounts: List[str] = Field(default_factory=lambda: ["default"])
     query_source: str = "trends"  # "trends" or "llm"
+    # Legacy field: upstream renamed OLLAMA_HOST to LOCAL_LLM_BASE_URL. Kept so
+    # existing configs keep working; llm_base_url takes precedence when set.
     ollama_host: Optional[str] = None
+    # Upstream LLM contract: LLM_PROVIDER selects "local" (Ollama-compatible)
+    # or "openrouter"; the base URL/model/key env var names differ per provider.
+    llm_provider: str = "local"  # "local" or "openrouter"
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_api_key: Optional[str] = None
     log_level: str = "INFO"  # "INFO" or "DEBUG"
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     webhook_url: Optional[str] = None
     auto_update_upstream: bool = True
+
+    @field_validator("llm_provider")
+    @classmethod
+    def _coerce_llm_provider(cls, v: object) -> str:
+        return v if v in ("local", "openrouter") else "local"
 
     @field_validator("accounts")
     @classmethod

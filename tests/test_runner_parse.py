@@ -6,11 +6,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import server.runner as runner
 from server.runner import (
+    _llm_env,
     _prune_old_logs,
     is_safe_log_filename,
     parse_log_line,
     state,
 )
+from server.config import AppConfig
 
 
 def _fresh(account="default"):
@@ -214,3 +216,91 @@ def test_prune_keeps_newest_logs(tmp_path, monkeypatch):
     assert remaining[0] == "run_20250105_030000.log"
     # Non-run files untouched.
     assert (tmp_path / "history.json").exists()
+
+
+def test_history_write_is_atomic(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "HISTORY_FILE", tmp_path / "history.json")
+    runner.save_history_entry({"exit_code": 0, "stats": {}})
+    assert (tmp_path / "history.json").exists()
+    # No stray temp files left behind by the atomic replace.
+    assert list(tmp_path.glob("history.*.tmp")) == []
+    assert len(runner.get_history()) == 1
+
+
+def test_llm_env_local_provider():
+    cfg = AppConfig(
+        query_source="llm",
+        llm_provider="local",
+        llm_base_url="http://ollama:11434/v1",
+        llm_model="llama3.1",
+        llm_api_key="secret",
+    )
+    env = _llm_env(cfg)
+    assert env["LLM_PROVIDER"] == "local"
+    assert env["LOCAL_LLM_BASE_URL"] == "http://ollama:11434/v1"
+    assert env["LOCAL_LLM_MODEL"] == "llama3.1"
+    assert env["LOCAL_LLM_API_KEY"] == "secret"
+    assert "OPENROUTER_BASE_URL" not in env
+
+
+def test_llm_env_openrouter_provider():
+    cfg = AppConfig(
+        query_source="llm",
+        llm_provider="openrouter",
+        llm_base_url="https://openrouter.ai/api/v1",
+        llm_model="openrouter/free",
+        llm_api_key="key",
+    )
+    env = _llm_env(cfg)
+    assert env["LLM_PROVIDER"] == "openrouter"
+    assert env["OPENROUTER_BASE_URL"] == "https://openrouter.ai/api/v1"
+    assert env["OPENROUTER_MODEL"] == "openrouter/free"
+    assert env["OPENROUTER_API_KEY"] == "key"
+
+
+def test_llm_env_legacy_ollama_host_and_trends():
+    # Old configs stored ollama_host; it must still reach upstream (new + old vars).
+    cfg = AppConfig(query_source="llm", ollama_host="host.docker.internal:11434")
+    env = _llm_env(cfg)
+    assert env["LOCAL_LLM_BASE_URL"] == "host.docker.internal:11434"
+    assert env["OLLAMA_HOST"] == "host.docker.internal:11434"
+    # Trends mode must not leak any LLM configuration.
+    assert _llm_env(AppConfig(query_source="trends")) == {}
+
+
+def test_diagnostics_multi_account_ratios(tmp_path, monkeypatch):
+    import datetime as dt
+
+    monkeypatch.setattr(runner, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "HISTORY_FILE", tmp_path / "history.json")
+    now = dt.datetime.now()
+    # Two accounts per run, both SKIP visual and quota complete. Ratios must be
+    # computed against account-entries (6), not run count (3).
+    for i in range(3):
+        runner.save_history_entry(
+            {
+                "start_time": (now - dt.timedelta(hours=i)).isoformat(),
+                "end_time": (now - dt.timedelta(hours=i)).isoformat(),
+                "duration": "10s",
+                "accounts": ["default", "spare"],
+                "stats": {
+                    "default": {
+                        "tasks": {"Visual search": "SKIP"},
+                        "search_points": "30/30",
+                        "points_gained": 0,
+                    },
+                    "spare": {
+                        "tasks": {"Visual search": "SKIP"},
+                        "search_points": "30/30",
+                        "points_gained": 0,
+                    },
+                },
+                "exit_code": 0,
+                "log_file": f"run_2025010{i}_030000.log",
+            }
+        )
+    diag = runner.get_diagnostics()
+    assert diag["visual_skip_recent"] == 6
+    assert any("Visual search" in s for s in diag["suggestions"])
+    assert any("30 is the full Silver daily cap" in s for s in diag["suggestions"])

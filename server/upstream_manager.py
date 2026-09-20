@@ -1,9 +1,9 @@
 import os
 import shutil
 import subprocess
+import time
 from functools import lru_cache
-from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Tuple
 from server.config import UPSTREAM_DIR, DATA_DIR, PROFILES_DIR, VISUAL_SEARCH_IMAGE, NOUNS_FILE
 
 UPSTREAM_REPO_URL = os.getenv(
@@ -11,6 +11,16 @@ UPSTREAM_REPO_URL = os.getenv(
 )
 
 VISUAL_SEARCH_FILENAME = "visual_search.jpg"
+
+# get_upstream_info shells out to git three times and is called on every
+# /api/status poll. Cache briefly; clone/pull invalidate it.
+_UPSTREAM_INFO_TTL_SECONDS = 10.0
+_upstream_info_cache: Optional[Tuple[float, Dict[str, Any]]] = None
+
+
+def invalidate_upstream_info() -> None:
+    global _upstream_info_cache
+    _upstream_info_cache = None
 
 
 @lru_cache(maxsize=1)
@@ -34,15 +44,21 @@ def ensure_upstream() -> Dict[str, Any]:
     if not UPSTREAM_DIR.exists() or not (UPSTREAM_DIR / ".git").exists():
         print(f"Cloning upstream repository from {UPSTREAM_REPO_URL} into {UPSTREAM_DIR}...")
         UPSTREAM_DIR.parent.mkdir(parents=True, exist_ok=True)
-        res = subprocess.run(
-            ["git", "clone", "--depth", "1", UPSTREAM_REPO_URL, str(UPSTREAM_DIR)],
-            capture_output=True,
-            text=True,
-        )
+        try:
+            res = subprocess.run(
+                ["git", "clone", "--depth", "1", UPSTREAM_REPO_URL, str(UPSTREAM_DIR)],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            print("Timed out cloning upstream repository (120s).")
+            return {"success": False, "error": "Timed out cloning upstream repository"}
         if res.returncode != 0:
             print(f"Failed to clone upstream repo: {res.stderr}")
             return {"success": False, "error": res.stderr}
         print("Upstream repo successfully cloned.")
+        invalidate_upstream_info()
 
     # Setup symlinks in upstream dir so upstream's relative paths find persistent data
     _setup_symlinks()
@@ -51,7 +67,14 @@ def ensure_upstream() -> Dict[str, Any]:
 
 
 def _setup_symlinks():
-    """Ensure data-dir, visual_search.jpg, nouns.txt point to persistent data directory."""
+    """Ensure data-dir and visual_search.jpg point to persistent data, and copy
+    the wordlist into upstream.
+
+    nouns.txt is deliberately copied rather than symlinked: upstream tracks it
+    in git, and replacing a tracked file with a symlink creates a typechange
+    that makes `git pull --ff-only` fail. The visual image and data-dir are
+    gitignored, so symlinks there are safe.
+    """
     if not UPSTREAM_DIR.exists():
         return
 
@@ -64,23 +87,21 @@ def _setup_symlinks():
 
     # nouns.txt
     upstream_nouns = UPSTREAM_DIR / "nouns.txt"
-    if not NOUNS_FILE.exists() and upstream_nouns.exists() and not upstream_nouns.is_symlink():
-        # Copy initial default nouns.txt to persistent storage
+    if upstream_nouns.is_symlink():
+        # Migrate installs created by older versions that symlinked it.
         try:
-            with open(upstream_nouns, "r", encoding="utf-8") as src, open(NOUNS_FILE, "w", encoding="utf-8") as dst:
-                dst.write(src.read())
-        except Exception as e:
+            upstream_nouns.unlink()
+        except OSError as e:
+            print(f"Could not remove legacy nouns.txt symlink: {e}")
+    if not NOUNS_FILE.exists() and upstream_nouns.is_file():
+        # Seed the persistent copy from upstream's shipped wordlist.
+        try:
+            shutil.copyfile(upstream_nouns, NOUNS_FILE)
+        except OSError as e:
             print(f"Error copying initial nouns.txt: {e}")
+    sync_nouns_to_upstream()
 
-    if NOUNS_FILE.exists() and not upstream_nouns.is_symlink():
-        try:
-            if upstream_nouns.exists():
-                upstream_nouns.unlink()
-            upstream_nouns.symlink_to(NOUNS_FILE.resolve())
-        except Exception as e:
-            print(f"Symlink error for nouns.txt: {e}")
-
-    # visual_search.jpg
+    # visual_search.jpg (gitignored upstream, symlink is safe)
     upstream_visual = UPSTREAM_DIR / VISUAL_SEARCH_FILENAME
     if VISUAL_SEARCH_IMAGE.exists() and not upstream_visual.is_symlink():
         try:
@@ -91,18 +112,50 @@ def _setup_symlinks():
             print(f"Symlink error for visual_search.jpg: {e}")
 
 
+def sync_nouns_to_upstream() -> None:
+    """Copy the persistent wordlist over upstream's tracked nouns.txt.
+
+    Upstream reads REPO_ROOT/nouns.txt at runtime, so the dashboard's edits must
+    land there. A copy keeps the persistent file authoritative without breaking
+    git updates the way a symlink would.
+    """
+    upstream_nouns = UPSTREAM_DIR / "nouns.txt"
+    if not NOUNS_FILE.exists() or not UPSTREAM_DIR.exists():
+        return
+    try:
+        if upstream_nouns.is_symlink():
+            upstream_nouns.unlink()
+        shutil.copyfile(NOUNS_FILE, upstream_nouns)
+    except OSError as e:
+        print(f"Error syncing nouns.txt to upstream: {e}")
+
+
+def link_persistent_data() -> None:
+    """Re-apply persistent-data links after the dashboard writes a data file."""
+    _setup_symlinks()
+
+
 def update_upstream() -> Dict[str, Any]:
     """Pulls the latest commits from upstream repository."""
     if not UPSTREAM_DIR.exists() or not (UPSTREAM_DIR / ".git").exists():
         return ensure_upstream()
 
     try:
+        # Our copied nouns.txt shows as a local modification of a tracked file,
+        # which makes a fast-forward pull refuse. Discard it first; the
+        # persistent copy is re-applied by _setup_symlinks below.
+        subprocess.run(
+            ["git", "-C", str(UPSTREAM_DIR), "checkout", "--", "nouns.txt"],
+            capture_output=True,
+            text=True,
+        )
         res = subprocess.run(
             ["git", "-C", str(UPSTREAM_DIR), "pull", "--ff-only"],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=60,
         )
+        invalidate_upstream_info()
         _setup_symlinks()
         return {
             "success": res.returncode == 0,
@@ -110,11 +163,28 @@ def update_upstream() -> Dict[str, Any]:
             "stderr": res.stderr,
             "info": get_upstream_info(),
         }
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Timed out pulling upstream (60s)"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
-def get_upstream_info() -> Dict[str, Any]:
+def get_upstream_info(use_cache: bool = True) -> Dict[str, Any]:
+    """Cached view of the local upstream clone; see _read_upstream_info."""
+    global _upstream_info_cache
+    now = time.monotonic()
+    if (
+        use_cache
+        and _upstream_info_cache is not None
+        and now - _upstream_info_cache[0] < _UPSTREAM_INFO_TTL_SECONDS
+    ):
+        return _upstream_info_cache[1]
+    info = _read_upstream_info()
+    _upstream_info_cache = (now, info)
+    return info
+
+
+def _read_upstream_info() -> Dict[str, Any]:
     """Gets commit hash, author, date, and commit message of the local upstream clone."""
     if not UPSTREAM_DIR.exists() or not (UPSTREAM_DIR / ".git").exists():
         return {"installed": False}

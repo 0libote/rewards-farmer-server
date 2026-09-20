@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Rewards Farmer Server</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌾</text></svg>">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="/static/vendor/tailwind-3.4.17.js"></script>
+  <script src="/static/vendor/lucide-0.544.0.min.js"></script>
   <script>
     tailwind.config = {
       darkMode: 'class',
@@ -304,6 +304,20 @@
     </div>
   </div>
 
+  <!-- AUTH MODAL -->
+  <div id="auth-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] hidden flex items-center justify-center p-4">
+    <form onsubmit="submitAuthToken(event)" class="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-sm w-full p-6 space-y-4 shadow-2xl">
+      <div class="flex items-center space-x-2">
+        <i data-lucide="lock" class="w-5 h-5 text-emerald-400"></i>
+        <h3 class="font-bold text-lg text-white">Dashboard Locked</h3>
+      </div>
+      <p class="text-xs text-zinc-400">This server requires an access token. Enter the <code class="text-zinc-200">DASHBOARD_TOKEN</code> you configured.</p>
+      <input type="password" id="auth-token-input" autocomplete="current-password" placeholder="Access token" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
+      <p id="auth-error" class="hidden text-xs text-rose-400"></p>
+      <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-lg text-sm">Unlock</button>
+    </form>
+  </div>
+
   <!-- CONFIGURATION & SETTINGS MODAL -->
   <div id="config-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 hidden flex items-center justify-center p-4">
     <div class="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-2xl w-full p-6 space-y-5 shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -327,9 +341,26 @@
           </select>
         </div>
 
-        <div id="cfg-ollama-group">
-          <label for="cfg-ollama-host" class="block font-semibold text-zinc-300 mb-1">Ollama Host (if using LLM)</label>
-          <input type="text" id="cfg-ollama-host" placeholder="host.docker.internal:11434" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
+        <div id="cfg-llm-group" class="space-y-2">
+          <div>
+            <label for="cfg-llm-provider" class="block font-semibold text-zinc-300 mb-1">LLM Provider (if using LLM)</label>
+            <select id="cfg-llm-provider" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
+              <option value="local">Local (Ollama-compatible API)</option>
+              <option value="openrouter">OpenRouter</option>
+            </select>
+          </div>
+          <div>
+            <label for="cfg-llm-base-url" class="block font-semibold text-zinc-300 mb-1">LLM Base URL</label>
+            <input type="text" id="cfg-llm-base-url" placeholder="http://host.docker.internal:11434/v1" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
+          </div>
+          <div>
+            <label for="cfg-llm-model" class="block font-semibold text-zinc-300 mb-1">LLM Model</label>
+            <input type="text" id="cfg-llm-model" placeholder="llama3.1" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
+          </div>
+          <div>
+            <label for="cfg-llm-api-key" class="block font-semibold text-zinc-300 mb-1">LLM API Key (optional)</label>
+            <input type="password" id="cfg-llm-api-key" placeholder="Leave blank to keep existing" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
+          </div>
         </div>
 
         <div class="border-t border-zinc-800 pt-3">
@@ -433,6 +464,8 @@
     let activeVncAccount = null;
     let currentVncUrl = null;
     let runTimerInterval = null;
+    let authEnabled = false;
+    let appStarted = false;
 
     const ACCOUNT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
     const MAX_TERMINAL_LINES = 500;
@@ -469,10 +502,77 @@
       if (e.key === 'Escape') closeConfigModal();
     });
 
+    // Fetch wrapper: surfaces the auth modal instead of a silent failure when
+    // the dashboard is protected and the session/token is missing.
+    async function apiFetch(url, opts) {
+      const res = await fetch(url, opts);
+      if (res.status === 401) showAuthModal();
+      return res;
+    }
+
+    function showAuthModal() {
+      document.getElementById('auth-modal').classList.remove('hidden');
+      if (window.lucide) lucide.createIcons();
+      setTimeout(() => {
+        const input = document.getElementById('auth-token-input');
+        if (input) input.focus();
+      }, 50);
+    }
+
+    function hideAuthModal() {
+      document.getElementById('auth-modal').classList.add('hidden');
+    }
+
+    async function submitAuthToken(event) {
+      if (event) event.preventDefault();
+      const token = document.getElementById('auth-token-input').value;
+      const errEl = document.getElementById('auth-error');
+      errEl.classList.add('hidden');
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token })
+        });
+        if (!res.ok) {
+          errEl.textContent = 'Invalid token. Try again.';
+          errEl.classList.remove('hidden');
+          return;
+        }
+        document.getElementById('auth-token-input').value = '';
+        hideAuthModal();
+        startApp();
+      } catch (err) {
+        errEl.textContent = 'Error: ' + err;
+        errEl.classList.remove('hidden');
+      }
+    }
+
+    async function checkAuth() {
+      try {
+        const res = await fetch('/api/auth/status');
+        const data = await res.json();
+        authEnabled = !!data.enabled;
+        return !authEnabled || data.authenticated;
+      } catch (err) {
+        // Network error: let normal request handling report it.
+        return true;
+      }
+    }
+
+    function startApp() {
+      if (appStarted) return;
+      appStarted = true;
+      loadStatus();
+      loadHistory();
+      loadDiagnostics();
+      connectWebSocket();
+    }
+
     // Fetch initial status & poll
     async function loadStatus() {
       try {
-        const res = await fetch('/api/status');
+        const res = await apiFetch('/api/status');
         const data = await res.json();
         currentStatus = data;
         renderStatus(data);
@@ -483,7 +583,7 @@
 
     async function loadHistory() {
       try {
-        const res = await fetch('/api/history');
+        const res = await apiFetch('/api/history');
         const history = await res.json();
         renderHistory(history);
       } catch (err) {
@@ -494,7 +594,7 @@
     async function loadDiagnostics() {
       const el = document.getElementById('diagnostics-container');
       try {
-        const res = await fetch('/api/diagnostics');
+        const res = await apiFetch('/api/diagnostics');
         const d = await res.json();
         const rows = [
           ['Runs analyzed', `${d.recent_runs_analyzed} recent / ${d.total_runs_analyzed} total`],
@@ -852,7 +952,7 @@
       document.getElementById('vnc-frame').src = 'about:blank';
 
       try {
-        const res = await fetch('/api/vnc/start', {
+        const res = await apiFetch('/api/vnc/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ account })
@@ -864,10 +964,10 @@
           return;
         }
 
-        // Connect iframe to noVNC, keeping the page's own scheme/host so the
-        // dashboard also works behind reverse proxies and non-default hosts.
-        const vncPort = data.port || 6345;
-        currentVncUrl = `${window.location.protocol}//${window.location.hostname}:${vncPort}/vnc.html?autoconnect=true&resize=scale&reconnect=true`;
+        // Served through the dashboard's own origin via /vnc, so interactive
+        // login works on the dashboard port and behind HTTPS reverse proxies.
+        // path= tells noVNC where the proxied websockify endpoint lives.
+        currentVncUrl = `/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&path=vnc/websockify`;
         
         setTimeout(() => {
           document.getElementById('vnc-frame').src = currentVncUrl;
@@ -895,7 +995,7 @@
       document.getElementById('vnc-frame').src = 'about:blank';
       document.getElementById('vnc-modal').classList.add('hidden');
       try {
-        await fetch('/api/vnc/stop', { method: 'POST' });
+        await apiFetch('/api/vnc/stop', { method: 'POST' });
       } catch (err) {
         console.error("Error stopping VNC:", err);
       }
@@ -921,7 +1021,7 @@
       }
 
       try {
-        const res = await fetch('/api/run', {
+        const res = await apiFetch('/api/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ accounts })
@@ -939,7 +1039,7 @@
     async function triggerStop() {
       if (!confirm("Are you sure you want to stop the current run?")) return;
       try {
-        await fetch('/api/stop', { method: 'POST' });
+        await apiFetch('/api/stop', { method: 'POST' });
         loadStatus();
       } catch (err) {
         alert("Failed to stop: " + err);
@@ -956,7 +1056,7 @@
         return;
       }
       try {
-        const res = await fetch('/api/accounts/add', {
+        const res = await apiFetch('/api/accounts/add', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ account: trimmed })
@@ -975,7 +1075,7 @@
     async function removeAccount(name) {
       if (!confirm(`Remove account profile '${name}' from active config?`)) return;
       try {
-        await fetch('/api/accounts/remove', {
+        await apiFetch('/api/accounts/remove', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ account: name })
@@ -990,14 +1090,17 @@
     async function openConfigModal() {
       try {
         const [cfgRes, nounsRes] = await Promise.all([
-          fetch('/api/config'),
-          fetch('/api/nouns')
+          apiFetch('/api/config'),
+          apiFetch('/api/nouns')
         ]);
         const cfg = await cfgRes.json();
         const nouns = await nounsRes.json();
 
         document.getElementById('cfg-query-source').value = cfg.query_source || 'trends';
-        document.getElementById('cfg-ollama-host').value = cfg.ollama_host || '';
+        document.getElementById('cfg-llm-provider').value = cfg.llm_provider || 'local';
+        document.getElementById('cfg-llm-base-url').value = cfg.llm_base_url || cfg.ollama_host || '';
+        document.getElementById('cfg-llm-model').value = cfg.llm_model || '';
+        document.getElementById('cfg-llm-api-key').value = cfg.llm_api_key || '';
         const sched = cfg.schedule || {};
         document.getElementById('cfg-sched-enabled').checked = sched.enabled ?? true;
         document.getElementById('cfg-sched-mode').value = sched.mode || 'daily';
@@ -1033,9 +1136,12 @@
       // saving from this modal can't silently wipe modes it doesn't edit.
       const prevSchedule = (currentStatus && currentStatus.scheduler) || {};
       const payload = {
-        accounts: currentStatus.accounts,
+        accounts: (currentStatus && currentStatus.accounts) || undefined,
         query_source: document.getElementById('cfg-query-source').value,
-        ollama_host: document.getElementById('cfg-ollama-host').value || null,
+        llm_provider: document.getElementById('cfg-llm-provider').value,
+        llm_base_url: document.getElementById('cfg-llm-base-url').value || null,
+        llm_model: document.getElementById('cfg-llm-model').value || null,
+        llm_api_key: document.getElementById('cfg-llm-api-key').value || null,
         log_level: document.getElementById('cfg-log-level').value,
         webhook_url: document.getElementById('cfg-webhook').value || null,
         auto_update_upstream: document.getElementById('cfg-auto-update').checked,
@@ -1053,11 +1159,16 @@
       };
 
       try {
-        await fetch('/api/config', {
+        const res = await apiFetch('/api/config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
+        if (!res.ok) {
+          const detail = await res.json().catch(() => ({}));
+          alert("Could not save settings: " + (detail.detail || res.statusText));
+          return;
+        }
         await saveNouns();
         closeConfigModal();
         loadStatus();
@@ -1069,11 +1180,15 @@
     async function saveNouns() {
       const content = document.getElementById('cfg-nouns-text').value;
       try {
-        await fetch('/api/nouns', {
+        const res = await apiFetch('/api/nouns', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ content })
         });
+        if (!res.ok) {
+          const detail = await res.json().catch(() => ({}));
+          alert("Could not save wordlist: " + (detail.detail || res.statusText));
+        }
       } catch (err) {
         console.error("Error saving nouns:", err);
       }
@@ -1084,7 +1199,7 @@
       btn.disabled = true;
       btn.innerHTML = '<span class="animate-spin mr-1">🔄</span> Pulling...';
       try {
-        const res = await fetch('/api/upstream/update', { method: 'POST' });
+        const res = await apiFetch('/api/upstream/update', { method: 'POST' });
         const data = await res.json();
         alert(data.success ? "Upstream updated successfully!\n" + data.stdout : "Upstream update failed: " + data.error);
         loadStatus();
@@ -1099,7 +1214,7 @@
 
     async function generateVisualImage() {
       try {
-        const res = await fetch('/api/visual-search/generate', { method: 'POST' });
+        const res = await apiFetch('/api/visual-search/generate', { method: 'POST' });
         const data = await res.json();
         if (data.success) {
           alert("Visual search image fetched from Wikimedia!");
@@ -1124,7 +1239,7 @@
 
       ws.onclose = () => {
         document.getElementById('ws-status').className = 'w-2 h-2 rounded-full bg-zinc-600';
-        setTimeout(connectWebSocket, 3000);
+        if (appStarted) setTimeout(connectWebSocket, 3000);
       };
 
       ws.onmessage = (event) => {
@@ -1180,13 +1295,14 @@
     }
 
     // Poll status & init (skip background-tab polls to reduce server load)
-    setInterval(() => { if (!document.hidden) loadStatus(); }, 3000);
-    setInterval(() => { if (!document.hidden) loadHistory(); }, 15000);
-    setInterval(() => { if (!document.hidden) loadDiagnostics(); }, 30000);
-    loadStatus();
-    loadHistory();
-    loadDiagnostics();
-    connectWebSocket();
+    setInterval(() => { if (!document.hidden && appStarted) loadStatus(); }, 3000);
+    setInterval(() => { if (!document.hidden && appStarted) loadHistory(); }, 15000);
+    setInterval(() => { if (!document.hidden && appStarted) loadDiagnostics(); }, 30000);
+
+    (async () => {
+      if (await checkAuth()) startApp();
+      else showAuthModal();
+    })();
   </script>
 </body>
 </html>

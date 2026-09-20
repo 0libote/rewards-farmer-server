@@ -4,9 +4,9 @@ import json
 import os
 import re
 import signal
-import subprocess
+import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Optional, Any
 import httpx
 
 from server.config import (
@@ -166,8 +166,19 @@ def save_history_entry(entry: Dict[str, Any]):
     history.insert(0, entry)
     history = history[:100]  # keep last 100 runs
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2)
+    # Atomic replace: /api/status reads history.json on a 3s poll, so a plain
+    # truncate-and-write could expose a half-written file and read as [].
+    fd, tmp_path = tempfile.mkstemp(dir=str(LOGS_DIR), prefix="history.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
+        os.replace(tmp_path, HISTORY_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     _prune_old_logs()
 
 
@@ -260,6 +271,7 @@ def get_diagnostics() -> Dict[str, Any]:
     misc_warn_examples: List[str] = []
     empty_runs = 0
     quota_complete_runs = 0
+    account_entries = 0
     accounts_seen: List[str] = []
     for r in recent:
         stats = r.get("stats", {}) or {}
@@ -269,13 +281,13 @@ def get_diagnostics() -> Dict[str, Any]:
                 accounts_seen.append(acc)
             if not isinstance(st, dict):
                 continue
+            account_entries += 1
             try:
                 gained += int(st.get("points_gained", 0) or 0)
             except (TypeError, ValueError):
                 pass
             warns = st.get("warnings") or []
             has_explore_warn = any(str(w).startswith("Explore card") for w in warns)
-            has_misc_warn = any(str(w).startswith("Misc card") for w in warns)
             tasks = st.get("tasks") or {}
             if tasks.get(TASK_EXPLORE) == "OK" and has_explore_warn:
                 explore_ok_with_issues += 1
@@ -298,7 +310,7 @@ def get_diagnostics() -> Dict[str, Any]:
             empty_runs += 1
 
     suggestions: List[str] = []
-    if recent and visual_skip == len(recent):
+    if recent and account_entries and visual_skip == account_entries:
         suggestions.append(
             "Visual search SKIP on every recent run: this market variant has no "
             "'visual search streak' entry (see upstream issue #80). No action in "
@@ -307,8 +319,8 @@ def get_diagnostics() -> Dict[str, Any]:
         )
     if explore_ok_with_issues:
         suggestions.append(
-            f"Explore on Bing reports [OK] but {explore_ok_with_issues}/{len(recent)} recent "
-            "runs left cards incomplete after searching. Those searches counted toward "
+            f"Explore on Bing reports [OK] but {explore_ok_with_issues}/{account_entries} recent "
+            "account-runs left cards incomplete after searching. Those searches counted toward "
             "the daily quota without clearing the card - check the card descriptions "
             "manually once; if they need a specific click-through (not just a search), "
             "upstream needs a selector fix (paste diagnostics into a rewards-farmer issue)."
@@ -324,7 +336,7 @@ def get_diagnostics() -> Dict[str, Any]:
             "Enable smart-skip (schedule.skip_empty_runs) so the scheduler stops firing "
             "empty runs every 3h - they add ban-surface for zero gain. Manual runs always work."
         )
-    if recent and quota_complete_runs == len(recent):
+    if recent and account_entries and quota_complete_runs == account_entries:
         suggestions.append(
             "Search quota reads complete (e.g. 30/30) on every recent run. Under the 2026 "
             "Member/Silver/Gold system 30 is the full Silver daily cap (shared PC+mobile), "
@@ -660,6 +672,10 @@ async def _start_run_locked(accounts: Optional[List[str]] = None) -> Dict[str, A
     env["QUERY_SOURCE"] = config.query_source
     env["REWARDS_ACCOUNTS"] = ",".join(target_accounts)
     env["REWARDS_FARMER_LOG_LEVEL"] = config.log_level
+    # Point selenium at the driver baked into the image instead of letting
+    # Selenium Manager try to download one at runtime.
+    if os.path.exists("/usr/local/bin/msedgedriver"):
+        env["MSEDGEDRIVER_PATH"] = "/usr/local/bin/msedgedriver"
     # NOTE: intentionally NOT setting REWARDS_FARMER_LOG_FILE. Upstream would
     # then write to both stdout and the file, while this runner tees stdout
     # to the same file below -> every line duplicated, and print() telemetry
@@ -667,11 +683,37 @@ async def _start_run_locked(accounts: Optional[List[str]] = None) -> Dict[str, A
     # Single-writer instead: upstream logs to stdout only, we persist it.
     env.pop("REWARDS_FARMER_LOG_FILE", None)
     env["LANG"] = "en_US.UTF-8"
-    if config.ollama_host:
-        env["OLLAMA_HOST"] = config.ollama_host
+    env.update(_llm_env(config))
 
     asyncio.create_task(_run_process(env, target_accounts, log_file))
     return {"success": True, "message": f"Run started for accounts: {', '.join(target_accounts)}"}
+
+
+def _llm_env(config: AppConfig) -> Dict[str, str]:
+    """Translate dashboard LLM settings into upstream's current env contract.
+
+    Upstream moved from a single OLLAMA_HOST to LLM_PROVIDER plus provider
+    specific LOCAL_LLM_* / OPENROUTER_* variables, so OLLAMA_HOST alone is
+    ignored by recent revisions.
+    """
+    if config.query_source != "llm":
+        return {}
+
+    provider = (config.llm_provider or "local").lower()
+    prefix = "OPENROUTER" if provider == "openrouter" else "LOCAL_LLM"
+    env: Dict[str, str] = {"LLM_PROVIDER": provider}
+
+    base_url = config.llm_base_url or config.ollama_host
+    if base_url:
+        env[f"{prefix}_BASE_URL"] = base_url
+    if config.llm_model:
+        env[f"{prefix}_MODEL"] = config.llm_model
+    if config.llm_api_key:
+        env[f"{prefix}_API_KEY"] = config.llm_api_key
+    # Older upstream revisions still read OLLAMA_HOST.
+    if config.ollama_host:
+        env["OLLAMA_HOST"] = config.ollama_host
+    return env
 
 
 def _append_to_log_file(log_file: Path, line: str) -> None:

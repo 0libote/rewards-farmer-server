@@ -21,6 +21,19 @@ AUTH_COOKIE_NAMES = {
 # a session cookie. Offset between the Chromium epoch and the Unix epoch.
 _CHROMIUM_TO_UNIX_OFFSET_S = 11644473600
 
+# /api/status polls login state for every account. Inspecting a profile copies a
+# SQLite file and reads Preferences, so cache briefly and invalidate explicitly
+# when a session ends or accounts change.
+_CACHE_TTL_SECONDS = 5.0
+_login_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+
+
+def invalidate_account_cache(account: Optional[str] = None) -> None:
+    if account is None:
+        _login_cache.clear()
+    else:
+        _login_cache.pop(account, None)
+
 
 def _chromium_now_us() -> int:
     return int((time.time() + _CHROMIUM_TO_UNIX_OFFSET_S) * 1_000_000)
@@ -132,6 +145,17 @@ def get_account_email(profile_dir: Path) -> Optional[str]:
 
 
 def check_account_login(account_name: str) -> Dict[str, Any]:
+    """Cached wrapper around _check_account_login; see _CACHE_TTL_SECONDS."""
+    hit = _login_cache.get(account_name)
+    now = time.monotonic()
+    if hit and now - hit[0] < _CACHE_TTL_SECONDS:
+        return hit[1]
+    result = _check_account_login(account_name)
+    _login_cache[account_name] = (now, result)
+    return result
+
+
+def _check_account_login(account_name: str) -> Dict[str, Any]:
     """Checks whether an account's browser profile contains valid Microsoft authentication cookies."""
     if not is_valid_account_name(account_name):
         return {

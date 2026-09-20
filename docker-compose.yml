@@ -7,11 +7,11 @@ services:
     # Chromium requires adequate shared memory to prevent crashing on heavy web pages
     shm_size: 2gb
     ports:
-      - "8345:8345" # Web Dashboard
-      # NOTE: the interactive login stream (noVNC) has no password. On remote
-      # servers prefer binding to localhost ("127.0.0.1:6345:6345") and reaching
-      # it via an SSH tunnel or authenticated reverse proxy.
-      - "6345:6345" # Interactive Browser Login (noVNC)
+      - "8345:8345" # Web Dashboard (also proxies interactive login at /vnc)
+      # Optional direct noVNC access. The dashboard now proxies the interactive
+      # login through /vnc, so this mapping can be removed or bound to
+      # localhost ("127.0.0.1:6345:6345") to avoid exposing it.
+      - "6345:6345" # Interactive Browser Login (noVNC, direct)
     volumes:
       # All account profiles, settings, logs, and state persist here
       - ./data:/app/data
@@ -21,6 +21,9 @@ services:
       - PORT=8345
       - VNC_PORT=6345
       - PYTHONUNBUFFERED=1
+      # Set DASHBOARD_TOKEN in your shell/.env to require a token for the
+      # dashboard, API and interactive login. Empty means no authentication.
+      - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8345/api/health"]
       interval: 60s

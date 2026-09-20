@@ -16,17 +16,23 @@ if [ ! -d "$UPSTREAM_DIR/.git" ]; then
     git clone --depth 1 https://github.com/User0332/rewards-farmer.git "$UPSTREAM_DIR"
 else
     echo "Upstream directory already exists. Fetching latest updates..."
-    git -C "$UPSTREAM_DIR" pull || true
+    # Our copied nouns.txt shows as a local change to a tracked file, which
+    # blocks a fast-forward pull. Discard it first; it is re-applied below.
+    git -C "$UPSTREAM_DIR" checkout -- nouns.txt 2>/dev/null || true
+    git -C "$UPSTREAM_DIR" pull --ff-only || true
 fi
 
 # Link persistent data inside upstream so upstream scripts find it naturally
 ln -sfn "$DATA_DIR/data-dir" "$UPSTREAM_DIR/data-dir"
 
+# nouns.txt is tracked by upstream git, so copy it instead of symlinking: a
+# symlink replaces a tracked file and makes `git pull --ff-only` fail. The
+# persistent copy is authoritative once it exists.
 if [ -f "$DATA_DIR/nouns.txt" ]; then
-    ln -sfn "$DATA_DIR/nouns.txt" "$UPSTREAM_DIR/nouns.txt"
+    rm -f "$UPSTREAM_DIR/nouns.txt"
+    cp -f "$DATA_DIR/nouns.txt" "$UPSTREAM_DIR/nouns.txt"
 elif [ -f "$UPSTREAM_DIR/nouns.txt" ]; then
-    cp "$UPSTREAM_DIR/nouns.txt" "$DATA_DIR/nouns.txt"
-    ln -sfn "$DATA_DIR/nouns.txt" "$UPSTREAM_DIR/nouns.txt"
+    cp -f "$UPSTREAM_DIR/nouns.txt" "$DATA_DIR/nouns.txt"
 fi
 
 if [ -f "$DATA_DIR/visual_search.jpg" ]; then

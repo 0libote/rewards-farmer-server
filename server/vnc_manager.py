@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Dict, Optional, Any
 
-from server.account_checker import get_profile_dir
+from server.account_checker import get_profile_dir, invalidate_account_cache
 from server.config import DATA_DIR, is_valid_account_name
 from server.runner import state as runner_state
 
@@ -237,6 +237,9 @@ def stop_vnc_session() -> Dict[str, Any]:
     # Clean locks
     if account_name:
         clean_chromium_locks(get_profile_dir(account_name))
+        # Cookies were just flushed to disk; drop the cached login verdict so
+        # the dashboard reflects the new session immediately.
+        invalidate_account_cache(account_name)
 
     # Stop x11vnc, websockify, fluxbox, Xvfb
     for proc in [

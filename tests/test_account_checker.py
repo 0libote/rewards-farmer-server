@@ -2,7 +2,6 @@
 import json
 import sqlite3
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -106,3 +105,19 @@ def test_profile_dir_rejects_traversal(tmp_path, monkeypatch):
         get_profile_dir("..")
     with pytest.raises(ValueError):
         get_profile_dir("a/../../b")
+
+
+def test_login_cache_invalidated_explicitly(tmp_path, monkeypatch):
+    monkeypatch.setattr(checker, "PROFILES_DIR", tmp_path / "profiles")
+    _make_profile(
+        tmp_path / "profiles", "default", [(".bing.com", "ANON", _future_us())]
+    )
+    assert check_account_login("default")["logged_in"] is True
+
+    # Removing the cookie DB does not change the cached verdict...
+    (tmp_path / "profiles" / "Default" / "Network" / "Cookies").unlink()
+    assert check_account_login("default")["logged_in"] is True
+
+    # ...until it is explicitly invalidated (e.g. after a VNC login).
+    checker.invalidate_account_cache("default")
+    assert check_account_login("default")["logged_in"] is False

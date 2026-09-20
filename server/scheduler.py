@@ -1,5 +1,5 @@
 import asyncio
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
