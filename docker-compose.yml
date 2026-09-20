@@ -4,6 +4,9 @@ services:
     image: ghcr.io/0libote/rewards-farmer-server:latest
     container_name: rewards-farmer-server
     restart: unless-stopped
+    # Reap the short-lived Edge helper processes so they don't pile up as
+    # zombies (the container has no init of its own).
+    init: true
     # Chromium requires adequate shared memory to prevent crashing on heavy web pages
     shm_size: 2gb
     ports:

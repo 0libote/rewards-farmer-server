@@ -701,6 +701,17 @@ async def _start_run_locked(accounts: Optional[List[str]] = None) -> Dict[str, A
     env["LANG"] = "en_US.UTF-8"
     env.update(_llm_env(config))
 
+    # A lingering Edge process (for example the interactive-login browser, which
+    # the old stop path missed because it only matched `microsoft-edge`) keeps
+    # the profile locked. The automation browser then starts signed out and
+    # every task SKIPs. Clear processes and stale locks before each run.
+    try:
+        from server.vnc_manager import reset_edge_state
+
+        await asyncio.to_thread(reset_edge_state, target_accounts)
+    except Exception as exc:
+        print(f"[RUNNER] Edge cleanup failed (continuing anyway): {exc}")
+
     asyncio.create_task(_run_process(env, target_accounts, log_file))
     return {"success": True, "message": f"Run started for accounts: {', '.join(target_accounts)}"}
 

@@ -41,6 +41,39 @@ def clean_chromium_locks(profile_dir: Path):
                 print(f"Could not remove {lock_path}: {e}")
 
 
+# The real Edge binary is `msedge`; `microsoft-edge` is only a launcher script.
+# Killing just the launcher leaves the browser running and holding the profile
+# lock, after which the automation browser starts signed out and every task
+# SKIPs. Match the real process names too.
+EDGE_PROCESS_PATTERNS = ("msedge", "microsoft-edge")
+
+
+def kill_edge_processes() -> None:
+    """Terminate any Edge browser process so the profile lock is released."""
+    for pattern in EDGE_PROCESS_PATTERNS:
+        subprocess.run(["pkill", "-f", pattern], stderr=subprocess.DEVNULL)
+    time.sleep(1)
+
+
+def reset_edge_state(account_names: Optional[Any] = None) -> None:
+    """Kill lingering Edge processes and clear stale locks before a run.
+
+    A previous interactive session or a crashed run can leave an Edge process
+    holding the profile. The next automation browser then cannot use the signed
+    in profile, so it starts logged out and every task reports SKIP.
+    """
+    kill_edge_processes()
+    if not account_names:
+        return
+    if isinstance(account_names, str):
+        account_names = [account_names]
+    for name in account_names:
+        try:
+            clean_chromium_locks(get_profile_dir(name))
+        except Exception as e:
+            print(f"Could not clean locks for {name}: {e}")
+
+
 def is_process_running(proc: Optional[subprocess.Popen]) -> bool:
     return proc is not None and proc.poll() is None
 
@@ -231,8 +264,9 @@ def stop_vnc_session() -> Dict[str, Any]:
                 pass
         vnc_state.edge_proc = None
 
-    # Kill leftover chromium processes
-    subprocess.run(["pkill", "-f", "microsoft-edge"], stderr=subprocess.DEVNULL)
+    # Kill leftover Edge processes (msedge, not just the launcher) so the
+    # profile lock is actually released.
+    kill_edge_processes()
 
     # Clean locks
     if account_name:

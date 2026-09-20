@@ -26,6 +26,7 @@ from balance_probe import extract_account_balance
 try:
     import rewards_tasks
     import main
+    import accounts as upstream_accounts
 except ImportError as e:
     print(
         f"[FARM_WRAPPER] Could not import upstream modules from {UPSTREAM_SRC}: {e}\n"
@@ -35,6 +36,37 @@ except ImportError as e:
         flush=True,
     )
     raise
+
+
+# Upstream maps every name in REWARDS_ACCOUNTS to a subdirectory of the data
+# dir, so "default" becomes <data-dir>/default. The dashboard stores the
+# default account's profile at the data-dir root instead (that is where
+# Interactive Login writes it), so passing "default" through untouched made
+# automation open an empty, signed-out profile and every task SKIP. Rewrite
+# just that case; named accounts already line up.
+_original_configured = upstream_accounts.configured
+
+
+def _configured_with_root_default():
+    fixed = []
+    for account in _original_configured():
+        if (
+            account.name == "default"
+            and account.user_data_dir != upstream_accounts.USER_DATA_DIR
+        ):
+            fixed.append(
+                upstream_accounts.Account(
+                    name="default",
+                    user_data_dir=upstream_accounts.USER_DATA_DIR,
+                    profile_name=upstream_accounts.PROFILE_NAME,
+                )
+            )
+        else:
+            fixed.append(account)
+    return fixed
+
+
+upstream_accounts.configured = _configured_with_root_default
 
 
 # Wrap RewardsTaskUtils.complete_all_tasks to record raw balance.
@@ -64,6 +96,23 @@ def _report_balance(label: str, value: int | None) -> None:
 
 def instrumented_complete_all(self):
     balance_before = None
+
+    # Upstream navigates to the Rewards root in __init__. For some sessions and
+    # market variants that lands on a non-task page (observed: /about) instead
+    # of the dashboard, after which every task reports ElementNeverAppeared and
+    # SKIPs. Make sure we begin from the dashboard.
+    try:
+        time.sleep(2)
+        current = self.driver.current_url or ""
+        if "rewards.bing.com" in current and not any(
+            path in current for path in ("/dashboard", "/earn")
+        ):
+            print(f"[POINTS] Rewards landed on {current}; opening the dashboard.", flush=True)
+            self.driver.get("https://rewards.bing.com/dashboard")
+            time.sleep(3)
+    except Exception as exc:
+        print(f"[POINTS] Dashboard recovery failed: {exc}", flush=True)
+
     try:
         # Points header hydrates progressively; give it time and retry inside
         # the extractor rather than a single snapshot.
