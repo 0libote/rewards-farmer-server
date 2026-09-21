@@ -34,6 +34,12 @@ def test_accounts_filtered_to_valid_names():
     assert cfg.accounts == ["ok", "spaced", "second"]
 
 
+def test_accounts_deduplicated_case_insensitively():
+    # Upstream's accounts.configured() skips case-insensitive duplicates.
+    cfg = AppConfig(accounts=["default", "DEFAULT", "spare", "Spare"])
+    assert cfg.accounts == ["default", "spare"]
+
+
 def test_empty_accounts_falls_back_to_default():
     cfg = AppConfig(accounts=["../nope"])
     assert cfg.accounts == ["default"]

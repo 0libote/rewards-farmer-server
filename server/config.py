@@ -134,7 +134,22 @@ class AppConfig(BaseModel):
     def _filter_accounts(cls, v: object) -> List[str]:
         if not isinstance(v, list):
             return ["default"]
-        cleaned = [a.strip() for a in v if isinstance(a, str) and is_valid_account_name(a.strip())]
+        # Drop invalid names and case-insensitive duplicates, matching
+        # upstream's accounts.configured(), so the same profile is not listed
+        # (and run) twice.
+        seen = set()
+        cleaned: List[str] = []
+        for entry in v:
+            if not isinstance(entry, str):
+                continue
+            name = entry.strip()
+            if not is_valid_account_name(name):
+                continue
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(name)
         return (cleaned or ["default"])[:MAX_ACCOUNTS]
 
     @field_validator("query_source")

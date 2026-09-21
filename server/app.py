@@ -528,7 +528,7 @@ async def add_account(req: AccountActionRequest):
             detail="Account name must start with a letter or digit and contain only letters, digits, dashes or underscores (max 32 chars)",
         )
     cfg = get_config()
-    if name in cfg.accounts:
+    if any(a.lower() == name.lower() for a in cfg.accounts):
         return {"success": True, "message": "Account already exists"}
     if len(cfg.accounts) >= MAX_ACCOUNTS:
         raise HTTPException(status_code=400, detail=f"Account limit reached ({MAX_ACCOUNTS})")
@@ -544,11 +544,12 @@ async def remove_account(req: AccountActionRequest):
     if not is_valid_account_name(name):
         raise HTTPException(status_code=400, detail="Invalid account name")
     cfg = get_config()
-    if name not in cfg.accounts:
+    match = next((a for a in cfg.accounts if a.lower() == name.lower()), None)
+    if match is None:
         return {"success": True, "message": "Account does not exist"}
-    cfg.accounts.remove(name)
+    cfg.accounts.remove(match)
     save_config(cfg)
-    invalidate_account_cache(name)
+    invalidate_account_cache(match)
     return {"success": True, "accounts": cfg.accounts}
 
 
