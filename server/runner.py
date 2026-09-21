@@ -648,10 +648,19 @@ def parse_log_line(line: str):
             notices.append(notice)
             del notices[:-10]
 
-    # The browser logger reports an account that failed to start (profile
-    # locked, driver/Edge problem). Surface it rather than only in the log.
-    if "browser:" in line and "[FAIL]" in line:
-        notice = "browser " + line.split("browser:", 1)[-1].strip()[:190]
+    # The browser/main loggers report an account that failed to start or died
+    # (profile locked, driver problem, browser gone). Surface it, not just in
+    # the log. Task failures come from rewards_tasks and are handled above.
+    if "[FAIL]" in line and ("browser:" in line or "main:" in line):
+        logger_name = "browser" if "browser:" in line else "main"
+        notice = f"{logger_name} " + line.split(f"{logger_name}:", 1)[-1].strip()[:190]
+        notices = acc_entry.setdefault("notices", [])
+        if notice not in notices:
+            notices.append(notice)
+            del notices[:-10]
+    elif "driver said:" in line:
+        # Edge's own reason, logged as a separate line by the browser logger.
+        notice = "driver: " + line.split("driver said:", 1)[-1].strip()[:190]
         notices = acc_entry.setdefault("notices", [])
         if notice not in notices:
             notices.append(notice)

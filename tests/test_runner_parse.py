@@ -125,6 +125,23 @@ def test_account_start_failure_is_not_a_task():
     assert "default" not in state.account_stats["default"]["tasks"]
 
 
+def test_account_main_failure_captured_as_notice():
+    _fresh()
+    parse_log_line("=== account: default ===")
+    parse_log_line("12:00:00 ERROR    main: [FAIL] default: RuntimeError: rewards page never loaded")
+    notices = state.account_stats["default"]["notices"]
+    assert any("RuntimeError" in n for n in notices)
+    assert "default" not in state.account_stats["default"]["tasks"]
+
+
+def test_driver_reason_captured_as_notice():
+    _fresh()
+    parse_log_line("=== account: default ===")
+    parse_log_line("12:00:00 ERROR    browser:        driver said: session not created: Chrome instance exited")
+    notices = state.account_stats["default"]["notices"]
+    assert any("Chrome instance exited" in n for n in notices)
+
+
 def test_not_signed_in_warning_detected():
     _fresh()
     parse_log_line("=== account: default ===")
