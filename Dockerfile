@@ -4,7 +4,7 @@
 FROM oven/bun:1.4.2-slim AS frontend
 WORKDIR /build
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+RUN bun install --frozen-lockfile --ignore-scripts
 COPY tailwind.config.js ./
 COPY web/ ./web/
 COPY scripts/ ./scripts/
