@@ -24,6 +24,11 @@ services:
       - PORT=8345
       - VNC_PORT=6345
       - PYTHONUNBUFFERED=1
+      # Match these to the host user that owns ./data (see `id -u` / `id -g`)
+      # so the container does not write root-owned files. The server and the
+      # browser run as this user; it does not run as root.
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
       # Set DASHBOARD_TOKEN in your shell/.env to require a token for the
       # dashboard, API and interactive login. Empty means no authentication.
       - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-}

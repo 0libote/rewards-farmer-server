@@ -41,6 +41,9 @@ services:
     environment:
       # Optional but recommended: require a token for the dashboard/API/login
       - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-}
+      # Match the host user that owns ./data (id -u / id -g). Defaults to 1000.
+      - PUID=1000
+      - PGID=1000
     volumes:
       - ./data:/app/data
 ```
@@ -99,6 +102,8 @@ data/
 | `6345` | HTTP / WebSocket | Interactive Browser Login (noVNC) — **optional** now that the dashboard proxies it |
 
 > 🔒 **Authentication**: set `DASHBOARD_TOKEN` (environment variable or `.env`) to require a token for the dashboard, API and interactive login. When unset the dashboard is open, so on a shared or internet-facing host you should set it. The token is entered once in the browser and stored in an HttpOnly cookie.
+>
+> 👤 **Non-root**: the server and browser run as an unprivileged user (`PUID`/`PGID`, default `1000:1000`). Set them to your host user (`id -u` / `id -g`) so `./data` stays owned by you rather than root. The container only uses root briefly at startup to fix ownership and clone/update the upstream repo.
 >
 > The direct noVNC port `6345` has no password of its own. Since the dashboard now proxies the interactive login through `/vnc`, you can drop the `6345` mapping entirely (or bind it to `127.0.0.1`).
 

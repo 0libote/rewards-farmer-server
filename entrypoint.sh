@@ -7,8 +7,25 @@ DATA_DIR="${DATA_PATH:-/app/data}"
 UPSTREAM_DIR="${UPSTREAM_PATH:-/app/upstream}"
 PORT="${PORT:-8345}"
 
+# The server and browser run as this unprivileged user. Match PUID/PGID to the
+# host user that owns the bind-mounted ./data so files are not root-owned.
+PUID="${PUID:-1000}"
+PGID="${PGID:-1000}"
+RUNTIME_USER="${RUNTIME_USER:-app}"
+
 mkdir -p "$DATA_DIR/data-dir"
 mkdir -p "$DATA_DIR/logs"
+
+if [ "$(id -u)" = "0" ]; then
+    if ! getent group "$PGID" >/dev/null 2>&1; then
+        groupadd -o -g "$PGID" "$RUNTIME_USER"
+    fi
+    if ! id -u "$RUNTIME_USER" >/dev/null 2>&1; then
+        useradd -o -u "$PUID" -g "$PGID" -d "/home/$RUNTIME_USER" -m "$RUNTIME_USER"
+    else
+        usermod -o -u "$PUID" -g "$PGID" "$RUNTIME_USER" 2>/dev/null || true
+    fi
+fi
 
 # Ensure upstream is cloned if not present
 if [ ! -d "$UPSTREAM_DIR/.git" ]; then
@@ -49,6 +66,15 @@ if [ ! -f "$DATA_DIR/visual_search.jpg" ]; then
     fi
 fi
 
-# Start FastAPI server
-echo "Starting Dashboard on port $PORT..."
+# Hand the persistent directories to the runtime user, then drop root. git and
+# the initial image fetch above ran as root; everything after runs unprivileged.
+echo "Starting Dashboard on port $PORT as uid $PUID..."
+if [ "$(id -u)" = "0" ]; then
+    chown -R "$PUID:$PGID" "$DATA_DIR" "$UPSTREAM_DIR" "/home/$RUNTIME_USER" 2>/dev/null || true
+    mkdir -p /tmp/.X11-unix && chown "$PUID:$PGID" /tmp/.X11-unix 2>/dev/null || true
+    exec setpriv --reuid="$PUID" --regid="$PGID" --clear-groups \
+        env HOME="/home/$RUNTIME_USER" \
+        uvicorn server.app:app --host 0.0.0.0 --port "$PORT"
+fi
+
 exec uvicorn server.app:app --host 0.0.0.0 --port "$PORT"
