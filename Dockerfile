@@ -1,3 +1,15 @@
+# Stage 1: build dashboard frontend assets with Bun (Tailwind + Lucide).
+# Keeps ~780 KB of vendor blobs out of git; the compiled output is copied
+# into the final image below. Versions are pinned in package.json/bun.lock.
+FROM oven/bun:1.4.2-slim AS frontend
+WORKDIR /build
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+COPY tailwind.config.js ./
+COPY web/ ./web/
+COPY scripts/ ./scripts/
+RUN bun run build
+
 FROM python:3.12-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -50,6 +62,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy server & web code
 COPY server/ ./server/
 COPY web/ ./web/
+# Bun-built dashboard assets (precompiled app.css + pinned Lucide bundle)
+COPY --from=frontend /build/web/static/app.css ./web/static/app.css
+COPY --from=frontend /build/web/static/vendor/ ./web/static/vendor/
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 

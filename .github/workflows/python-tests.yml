@@ -7,6 +7,29 @@ on:
   workflow_dispatch:
 
 jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build dashboard assets
+        run: bun run build
+
+      - name: Verify served assets resolve
+        run: |
+          test -s web/static/app.css
+          test -s web/static/vendor/lucide-0.544.0.min.js
+          grep -q 'href="/static/app.css"' web/index.html
+
   pytest:
     runs-on: ubuntu-latest
     steps:

@@ -19,7 +19,7 @@ Designed specifically for headless Docker servers (VPS, Synology, Unraid, TrueNA
 - 📝 **Seed Wordlist Editor**: View and customize `nouns.txt` directly from the web settings.
 - 🩺 **Selector Self-Test**: One click per account runs upstream's read-only `check_selectors.py` and reports which selectors resolve, are absent, or failed — so UI changes can be diagnosed without waiting for a full run.
 - 🔒 **Optional Token Authentication**: Set `DASHBOARD_TOKEN` to lock the dashboard, API and interactive login behind an access token (HttpOnly cookie session).
-- 📴 **Fully Offline Dashboard**: Tailwind and Lucide are vendored locally, so the UI loads with no internet access and no third-party CDN at runtime.
+- 📴 **Fully Offline Dashboard**: Tailwind (precompiled via `bun run build`) and Lucide are bundled locally, so the UI loads with no internet access and no third-party CDN at runtime.
 - 📦 **Automated GHCR Package**: Automatically built and published as a Docker container package (`ghcr.io/0libote/rewards-farmer-server:latest`) on every commit.
 
 ---
@@ -134,6 +134,22 @@ If a run reports `[SKIP]`/`[FAIL]` for tasks you expect to work, use the **steth
 Whenever [User0332/rewards-farmer](https://github.com/User0332/rewards-farmer) releases updates or fixes:
 - Click the **"Pull Latest"** button in the Settings modal of the dashboard, OR
 - Simply restart the container (`docker compose restart`). The entrypoint checks for new commits at startup without affecting your profiles or configs.
+
+---
+
+## 🛠️ Frontend Assets (Bun)
+
+The dashboard's styling (Tailwind) and icons (Lucide) are managed with [Bun](https://bun.sh):
+versions are pinned in `package.json`/`bun.lock`, compiled locally, and served offline — no CDN at runtime.
+
+- **Docker builds run it automatically** (multi-stage `oven/bun` step in the `Dockerfile`); nothing to do.
+- For local development (`uvicorn server.app:app`), build once first or the page loads unstyled:
+  ```bash
+  bun install
+  bun run build  # writes web/static/app.css + web/static/vendor/lucide-*.min.js (gitignored)
+  ```
+- The compiled `app.css` (~22 KB) replaces the old 407 KB in-browser Tailwind Play CDN, and the
+  Lucide bundle is byte-identical to the pinned npm release.
 
 ---
 
