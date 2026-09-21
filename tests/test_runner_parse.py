@@ -317,6 +317,20 @@ def test_llm_env_openrouter_provider():
     assert env["OPENROUTER_API_KEY"] == "key"
 
 
+def test_llm_env_openrouter_extras():
+    cfg = AppConfig(
+        query_source="llm",
+        llm_provider="openrouter",
+        openrouter_http_referer="https://example.test",
+        openrouter_title="rewards-farmer",
+        llm_request_timeout=90,
+    )
+    env = _llm_env(cfg)
+    assert env["OPENROUTER_HTTP_REFERER"] == "https://example.test"
+    assert env["OPENROUTER_TITLE"] == "rewards-farmer"
+    assert env["LLM_REQUEST_TIMEOUT_SECONDS"] == "90"
+
+
 def test_llm_env_legacy_ollama_host_and_trends():
     # Old configs stored ollama_host; it must still reach upstream (new + old vars).
     cfg = AppConfig(query_source="llm", ollama_host="host.docker.internal:11434")

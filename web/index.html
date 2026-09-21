@@ -318,6 +318,22 @@
     </form>
   </div>
 
+  <!-- SELECTOR CHECK MODAL -->
+  <div id="selector-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-3xl w-full p-5 space-y-3 shadow-2xl max-h-[90vh] flex flex-col">
+      <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+        <div class="flex items-center space-x-2">
+          <i data-lucide="stethoscope" class="w-5 h-5 text-cyan-400"></i>
+          <h3 class="font-bold text-sm text-white">Selector Check: <span id="selector-account" class="text-cyan-400"></span></h3>
+        </div>
+        <button onclick="closeSelectorModal()" class="text-zinc-400 hover:text-zinc-200"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+      <p class="text-xs text-zinc-400">Read-only: completes no activities and claims no points. Paste any FAILED entries into an upstream issue.</p>
+      <div id="selector-status" class="text-xs text-cyan-300 hidden">Running selector check (opens Edge, ~1-2 min)...</div>
+      <pre id="selector-output" class="flex-1 overflow-auto bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-[11px] terminal-font text-zinc-300 whitespace-pre-wrap min-h-[200px]">Ready.</pre>
+    </div>
+  </div>
+
   <!-- CONFIGURATION & SETTINGS MODAL -->
   <div id="config-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 hidden flex items-center justify-center p-4">
     <div class="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-2xl w-full p-6 space-y-5 shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -360,6 +376,20 @@
           <div>
             <label for="cfg-llm-api-key" class="block font-semibold text-zinc-300 mb-1">LLM API Key (optional)</label>
             <input type="password" id="cfg-llm-api-key" placeholder="Leave blank to keep existing" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label for="cfg-llm-timeout" class="block font-semibold text-zinc-300 mb-1">LLM Timeout (s)</label>
+              <input type="number" id="cfg-llm-timeout" min="1" max="600" placeholder="60" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
+            </div>
+            <div>
+              <label for="cfg-openrouter-title" class="block font-semibold text-zinc-300 mb-1">OpenRouter Title</label>
+              <input type="text" id="cfg-openrouter-title" placeholder="rewards-farmer" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
+            </div>
+          </div>
+          <div>
+            <label for="cfg-openrouter-referer" class="block font-semibold text-zinc-300 mb-1">OpenRouter Referer (optional)</label>
+            <input type="text" id="cfg-openrouter-referer" placeholder="https://example.com" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-emerald-500">
           </div>
         </div>
 
@@ -499,7 +529,7 @@
 
     // ESC closes the settings modal (VNC requires an explicit Finish action).
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeConfigModal();
+      if (e.key === 'Escape') { closeConfigModal(); closeSelectorModal(); }
     });
 
     // Fetch wrapper: surfaces the auth modal instead of a silent failure when
@@ -625,6 +655,37 @@
       } catch (err) {
         el.textContent = 'Diagnostics unavailable: ' + err;
       }
+    }
+
+    async function runSelectorCheck(account) {
+      document.getElementById('selector-account').textContent = account;
+      document.getElementById('selector-output').textContent = 'Starting...';
+      document.getElementById('selector-status').classList.remove('hidden');
+      document.getElementById('selector-modal').classList.remove('hidden');
+      if (window.lucide) lucide.createIcons();
+      try {
+        const res = await apiFetch('/api/selectors/check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account })
+        });
+        const data = await res.json().catch(() => ({}));
+        document.getElementById('selector-status').classList.add('hidden');
+        if (!res.ok) {
+          document.getElementById('selector-output').textContent = 'Error: ' + (data.detail || res.statusText);
+          return;
+        }
+        const s = data.summary || {};
+        const summary = `Summary: OK=${s.ok ?? '?'} ABSENT=${s.absent ?? '?'} FAILED=${s.failed ?? '?'}`;
+        document.getElementById('selector-output').textContent = (data.output || '(no output)') + '\n\n' + summary;
+      } catch (err) {
+        document.getElementById('selector-status').classList.add('hidden');
+        document.getElementById('selector-output').textContent = 'Request failed: ' + err;
+      }
+    }
+
+    function closeSelectorModal() {
+      document.getElementById('selector-modal').classList.add('hidden');
     }
 
     function renderStatus(data) {
@@ -811,6 +872,9 @@
                 </button>
                 <button onclick="${isLoggedIn ? `triggerRun(['${jsAccount}'])` : `alertNotLoggedIn('${jsAccount}')`}" class="p-1.5 ${isLoggedIn ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300' : 'bg-zinc-900 text-zinc-600 cursor-not-allowed'} rounded-lg transition" title="${isLoggedIn ? 'Run this account only' : 'Must log in first'}">
                   <i data-lucide="play" class="w-3.5 h-3.5"></i>
+                </button>
+                <button onclick="runSelectorCheck('${jsAccount}')" class="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg transition" title="Read-only selector check (diagnose why tasks skip)">
+                  <i data-lucide="stethoscope" class="w-3.5 h-3.5"></i>
                 </button>
                 ${account !== 'default' ? `
                   <button onclick="removeAccount('${jsAccount}')" class="p-1.5 hover:bg-rose-500/20 hover:text-rose-400 text-zinc-600 rounded-lg transition" title="Remove account">
@@ -1111,6 +1175,9 @@
         document.getElementById('cfg-llm-base-url').value = cfg.llm_base_url || cfg.ollama_host || '';
         document.getElementById('cfg-llm-model').value = cfg.llm_model || '';
         document.getElementById('cfg-llm-api-key').value = cfg.llm_api_key || '';
+        document.getElementById('cfg-llm-timeout').value = cfg.llm_request_timeout || '';
+        document.getElementById('cfg-openrouter-title').value = cfg.openrouter_title || '';
+        document.getElementById('cfg-openrouter-referer').value = cfg.openrouter_http_referer || '';
         const sched = cfg.schedule || {};
         document.getElementById('cfg-sched-enabled').checked = sched.enabled ?? true;
         document.getElementById('cfg-sched-mode').value = sched.mode || 'daily';
@@ -1152,6 +1219,9 @@
         llm_base_url: document.getElementById('cfg-llm-base-url').value || null,
         llm_model: document.getElementById('cfg-llm-model').value || null,
         llm_api_key: document.getElementById('cfg-llm-api-key').value || null,
+        llm_request_timeout: Number.parseInt(document.getElementById('cfg-llm-timeout').value) || null,
+        openrouter_title: document.getElementById('cfg-openrouter-title').value || null,
+        openrouter_http_referer: document.getElementById('cfg-openrouter-referer').value || null,
         log_level: document.getElementById('cfg-log-level').value,
         webhook_url: document.getElementById('cfg-webhook').value || null,
         auto_update_upstream: document.getElementById('cfg-auto-update').checked,

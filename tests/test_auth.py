@@ -116,6 +116,46 @@ def test_vnc_proxy_reports_502_when_stack_down(client, monkeypatch):
     assert client.get("/vnc/vnc.html").status_code == 502
 
 
+def test_selector_check_rejects_invalid_account(client):
+    assert client.post("/api/selectors/check", json={"account": "../evil"}).status_code == 400
+
+
+def test_selector_check_endpoint_returns_report(client, monkeypatch):
+    captured = {}
+
+    async def fake(account, timeout=300):
+        captured["account"] = account
+        return {
+            "success": True,
+            "account": account,
+            "exit_code": 0,
+            "summary": {"ok": 5, "absent": 2, "failed": 0},
+            "output": "OK=5 ABSENT=2 FAILED=0",
+        }
+
+    monkeypatch.setattr(app_module, "run_selector_check_task", fake)
+    r = client.post("/api/selectors/check", json={"account": "default"})
+    assert r.status_code == 200
+    assert captured["account"] == "default"
+    assert r.json()["summary"] == {"ok": 5, "absent": 2, "failed": 0}
+
+
+def test_selector_check_blocked_while_running(client, monkeypatch):
+    monkeypatch.setattr(runner.state, "is_running", True)
+    assert client.post("/api/selectors/check", json={"account": "default"}).status_code == 409
+
+
+def test_selector_summary_parsing():
+    from server.selector_check import _parse_summary
+
+    assert _parse_summary("...\nOK=3  ABSENT=1  FAILED=2\n...") == {
+        "ok": 3,
+        "absent": 1,
+        "failed": 2,
+    }
+    assert _parse_summary("no summary here") is None
+
+
 def test_vnc_http_proxy_forwards_upstream(client, monkeypatch):
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer

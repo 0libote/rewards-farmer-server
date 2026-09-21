@@ -65,6 +65,14 @@ def test_query_source_and_log_level_coerced():
     assert AppConfig(query_source="llm").query_source == "llm"
 
 
+def test_llm_request_timeout_clamped():
+    assert AppConfig(llm_request_timeout=0).llm_request_timeout == 1
+    assert AppConfig(llm_request_timeout=9999).llm_request_timeout == 600
+    assert AppConfig(llm_request_timeout=None).llm_request_timeout is None
+    assert AppConfig(llm_request_timeout="").llm_request_timeout is None
+    assert AppConfig(llm_request_timeout="nonsense").llm_request_timeout is None
+
+
 def test_save_and_load_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(config_module, "DATA_DIR", tmp_path)
     monkeypatch.setattr(config_module, "CONFIG_FILE", tmp_path / "config.json")

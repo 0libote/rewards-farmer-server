@@ -17,6 +17,7 @@ Designed specifically for headless Docker servers (VPS, Synology, Unraid, TrueNA
 - 🔔 **Webhook Notifications**: Discord alerts (other generic webhook receivers get a plain-text fallback) when daily runs start, complete, or fail.
 - 🖼️ **Visual Search Image Tool**: Automatically fetches Wikimedia images via upstream's `random_image_for_visual_search.py` or allows uploading a custom image.
 - 📝 **Seed Wordlist Editor**: View and customize `nouns.txt` directly from the web settings.
+- 🩺 **Selector Self-Test**: One click per account runs upstream's read-only `check_selectors.py` and reports which selectors resolve, are absent, or failed — so UI changes can be diagnosed without waiting for a full run.
 - 🔒 **Optional Token Authentication**: Set `DASHBOARD_TOKEN` to lock the dashboard, API and interactive login behind an access token (HttpOnly cookie session).
 - 📴 **Fully Offline Dashboard**: Tailwind and Lucide are vendored locally, so the UI loads with no internet access and no third-party CDN at runtime.
 - 📦 **Automated GHCR Package**: Automatically built and published as a Docker container package (`ghcr.io/0libote/rewards-farmer-server:latest`) on every commit.
@@ -112,14 +113,21 @@ Settings can be changed directly in the **Web Dashboard** under the Settings mod
 - **LLM Provider**: `local` (any Ollama-compatible `/v1` endpoint) or `openrouter`.
 - **LLM Base URL**: e.g. `http://host.docker.internal:11434/v1` for local, or the OpenRouter API base.
 - **LLM Model / API Key**: model name and optional key for the chosen provider.
+- **LLM Timeout / OpenRouter Title & Referer**: optional extras mapped to `LLM_REQUEST_TIMEOUT_SECONDS`, `OPENROUTER_TITLE` and `OPENROUTER_HTTP_REFERER`.
 - **Automated Schedule**: Daily at a fixed UTC time, every N hours, or at multiple custom UTC times — plus an optional run shortly after startup.
 - **Webhook URL**: Discord webhook URL to receive status notifications (generic receivers get a plain-text fallback).
 
 > ℹ️ The LLM settings map onto upstream's `LLM_PROVIDER`, `LOCAL_LLM_*` and `OPENROUTER_*` environment variables. Older `ollama_host` values are still honoured as a fallback base URL.
+>
+> ⚙️ Other upstream environment variables set on the container are passed straight through to the run, so advanced options work without dashboard fields: `EDGE_BINARY` (custom Edge path), `REWARDS_DRIVER_LOG` (verbose msedgedriver log, useful when Edge will not start) and `REWARDS_FARMER_LOG_LEVEL`. `REWARDS_ACCOUNTS` and `QUERY_SOURCE` are managed by the dashboard.
 
 A `/api/health` endpoint (also at `/health`) is available for container healthchecks and uptime monitoring. Past run logs are kept under `./data/logs` (newest 30 files) and can be opened from the **Recent Run History** table or via `/api/logs/{filename}`.
 
 ---
+
+## 🩺 Diagnosing "everything skipped"
+
+If a run reports `[SKIP]`/`[FAIL]` for tasks you expect to work, use the **stethoscope button** on the account card. It runs upstream's read-only selector check against that account's profile and prints an `OK / ABSENT / FAILED` report (it completes no activities and claims no points). `ABSENT` is normal for a task your market does not ship; `FAILED` entries are what upstream needs a selector fix for. The same report is available at `POST /api/selectors/check` with `{"account": "default"}`.
 
 ## 🔄 Keeping Upstream Updated
 

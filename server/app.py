@@ -49,6 +49,11 @@ from server.runner import (
 from server.scheduler import init_scheduler, reload_schedule, get_schedule_info, shutdown_scheduler
 from server.vnc_manager import start_vnc_session, stop_vnc_session, get_vnc_status
 from server.account_checker import check_account_login, invalidate_account_cache
+from server.selector_check import (
+    run_selector_check as run_selector_check_task,
+    get_state as get_selector_check_state,
+    is_checking as selector_check_running,
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = BASE_DIR / "web"
@@ -83,6 +88,7 @@ def _filter_proxy_headers(headers) -> dict:
 # Shared OpenAPI error docs for endpoints raising HTTPException.
 _ERROR_400 = {"description": "Invalid request"}
 _ERROR_404 = {"description": "Not found"}
+_ERROR_409 = {"description": "Busy"}
 _ERROR_413 = {"description": "Payload too large"}
 _ERROR_500 = {"description": "Server error"}
 
@@ -214,6 +220,7 @@ async def get_system_status():
         "query_source": cfg.query_source,
         "webhook_configured": bool(cfg.webhook_url),
         "visual_search_ready": VISUAL_SEARCH_IMAGE.exists(),
+        "selector_check": get_selector_check_state(),
     }
 
 
@@ -268,6 +275,29 @@ async def fetch_diagnostics():
     skip = await asyncio.to_thread(should_skip_scheduled_run)
     diag["smart_skip"] = skip
     return diag
+
+
+@app.post("/api/selectors/check", responses={400: _ERROR_400, 409: _ERROR_409})
+async def check_selectors(req: AccountActionRequest):
+    """Run upstream's read-only selector check for one account.
+
+    Reports which selectors resolve against this account's actual Rewards UI so
+    a run that skips everything can be diagnosed without waiting for it.
+    Completes no activities and claims no points.
+    """
+    name = req.account.strip()
+    if not is_valid_account_name(name):
+        raise HTTPException(status_code=400, detail="Invalid account name")
+    if runner_state.is_running:
+        raise HTTPException(status_code=409, detail="A run is in progress; try again when it finishes.")
+    if get_vnc_status().get("active"):
+        raise HTTPException(status_code=409, detail="Close the interactive browser first.")
+    if selector_check_running():
+        raise HTTPException(status_code=409, detail="A selector check is already running.")
+    result = await run_selector_check_task(name)
+    if not result.get("success"):
+        raise HTTPException(status_code=409, detail=result.get("error", "Selector check failed"))
+    return result
 
 
 @app.get("/api/logs/{filename}", responses={404: _ERROR_404})

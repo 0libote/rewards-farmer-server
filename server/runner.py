@@ -672,6 +672,18 @@ async def _start_run_locked(accounts: Optional[List[str]] = None) -> Dict[str, A
     except ImportError:
         pass
 
+    # A selector check opens its own browser against the same profile.
+    try:
+        from server.selector_check import is_checking
+
+        if is_checking():
+            return {
+                "success": False,
+                "error": "A selector check is running; wait for it to finish before starting a run.",
+            }
+    except ImportError:
+        pass
+
     # Make sure upstream exists (blocking git I/O: keep off the event loop)
     info = await asyncio.to_thread(ensure_upstream)
     if not info.get("installed"):
@@ -765,6 +777,13 @@ def _llm_env(config: AppConfig) -> Dict[str, str]:
         env[f"{prefix}_MODEL"] = config.llm_model
     if config.llm_api_key:
         env[f"{prefix}_API_KEY"] = config.llm_api_key
+    if config.llm_request_timeout:
+        env["LLM_REQUEST_TIMEOUT_SECONDS"] = str(config.llm_request_timeout)
+    if provider == "openrouter":
+        if config.openrouter_http_referer:
+            env["OPENROUTER_HTTP_REFERER"] = config.openrouter_http_referer
+        if config.openrouter_title:
+            env["OPENROUTER_TITLE"] = config.openrouter_title
     # Older upstream revisions still read OLLAMA_HOST.
     if config.ollama_host:
         env["OLLAMA_HOST"] = config.ollama_host

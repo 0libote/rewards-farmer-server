@@ -105,6 +105,9 @@ class AppConfig(BaseModel):
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
     llm_api_key: Optional[str] = None
+    llm_request_timeout: Optional[int] = None  # seconds; LLM_REQUEST_TIMEOUT_SECONDS
+    openrouter_http_referer: Optional[str] = None
+    openrouter_title: Optional[str] = None
     log_level: str = "INFO"  # "INFO" or "DEBUG"
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     webhook_url: Optional[str] = None
@@ -114,6 +117,17 @@ class AppConfig(BaseModel):
     @classmethod
     def _coerce_llm_provider(cls, v: object) -> str:
         return v if v in ("local", "openrouter") else "local"
+
+    @field_validator("llm_request_timeout", mode="before")
+    @classmethod
+    def _clamp_llm_timeout(cls, v: object) -> Optional[int]:
+        if v is None or v == "":
+            return None
+        try:
+            iv = int(v)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+        return min(max(iv, 1), 600)
 
     @field_validator("accounts")
     @classmethod
