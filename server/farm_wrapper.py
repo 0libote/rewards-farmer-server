@@ -3,6 +3,7 @@
 Runs upstream rewards-farmer without modifying any upstream files,
 measuring total Microsoft Rewards points balance before and after the run.
 """
+import os
 import sys
 import time
 from pathlib import Path
@@ -15,6 +16,18 @@ if not UPSTREAM_SRC.exists():
 
 if UPSTREAM_SRC.exists():
     sys.path.insert(0, str(UPSTREAM_SRC))
+
+# Match main.py's own entrypoint: load the upstream .env if one is present
+# (a mounted file, for example). load_dotenv does not override variables that
+# are already set, so the server's dashboard settings still win.
+try:
+    from dotenv import load_dotenv
+    from constants import DOTENV_PATH
+
+    if os.path.isfile(DOTENV_PATH):
+        load_dotenv(DOTENV_PATH)
+except Exception:
+    pass
 
 # This file is executed as a script with its own directory as sys.path[0], but
 # be explicit so the balance probe is importable either way.

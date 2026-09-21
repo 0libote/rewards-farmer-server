@@ -110,6 +110,67 @@ def test_incomplete_card_warnings_tracked():
     assert state.account_stats["default"]["tasks"]["Explore on Bing"] == "OK"
 
 
+def test_unknown_task_name_is_tracked_from_logger():
+    _fresh()
+    parse_log_line("=== account: default ===")
+    # A task upstream might add later; tracked so the dashboard does not go stale.
+    parse_log_line("12:00:00 INFO     rewards_tasks: [OK] Watch a video")
+    assert state.account_stats["default"]["tasks"]["Watch a video"] == "OK"
+
+
+def test_account_start_failure_is_not_a_task():
+    _fresh()
+    parse_log_line("=== account: default ===")
+    parse_log_line("[FAIL] default: could not start Edge with this profile.")
+    assert "default" not in state.account_stats["default"]["tasks"]
+
+
+def test_not_signed_in_warning_detected():
+    _fresh()
+    parse_log_line("=== account: default ===")
+    parse_log_line(
+        "12:00:00 WARNING  rewards_tasks: Microsoft Rewards is NOT signed in "
+        "on rewards.bing.com for this profile!"
+    )
+    assert state.account_stats["default"]["not_signed_in"] is True
+
+
+def test_upstream_warning_captured_as_notice():
+    _fresh()
+    parse_log_line("=== account: default ===")
+    parse_log_line("12:00:00 WARNING  rewards_tasks: Search quota not filled: 30/60")
+    notices = state.account_stats["default"]["notices"]
+    assert any("Search quota not filled" in n for n in notices)
+
+
+def test_diagnostics_flags_not_signed_in(tmp_path, monkeypatch):
+    import datetime as dt
+
+    monkeypatch.setattr(runner, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "HISTORY_FILE", tmp_path / "history.json")
+    now = dt.datetime.now()
+    runner.save_history_entry(
+        {
+            "start_time": now.isoformat(),
+            "end_time": now.isoformat(),
+            "duration": "10s",
+            "accounts": ["default"],
+            "stats": {
+                "default": {
+                    "tasks": {"Bing daily set": "SKIP"},
+                    "not_signed_in": True,
+                    "points_gained": 0,
+                }
+            },
+            "exit_code": 0,
+            "log_file": "run_20250101_030000.log",
+        }
+    )
+    diag = runner.get_diagnostics()
+    assert diag["not_signed_in_recent"] == 1
+    assert any("NOT signed in" in s for s in diag["suggestions"])
+
+
 def test_lifetime_stats_not_inflated_by_quota_position(tmp_path, monkeypatch):
     import datetime as dt
 

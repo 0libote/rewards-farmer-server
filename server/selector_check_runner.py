@@ -17,6 +17,17 @@ if not UPSTREAM_SRC.exists():
 if str(UPSTREAM_SRC) not in sys.path:
     sys.path.insert(0, str(UPSTREAM_SRC))
 
+# Match upstream's own entrypoints: load an upstream .env if present. Existing
+# environment variables win, so the server's settings are not overridden.
+try:
+    from dotenv import load_dotenv
+    from constants import DOTENV_PATH
+
+    if os.path.isfile(DOTENV_PATH):
+        load_dotenv(DOTENV_PATH)
+except Exception:
+    pass
+
 try:
     import check_selectors
 except ImportError as e:

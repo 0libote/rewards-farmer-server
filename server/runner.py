@@ -38,6 +38,13 @@ TASK_NAMES = [
     TASK_BONUS,
 ]
 
+# Upstream logs per-task outcomes through the rewards_tasks logger. Matching the
+# name generically (rather than only against TASK_NAMES) keeps the dashboard
+# correct if upstream adds or renames a task; TASK_NAMES stays as the expected
+# set for ordering and progress.
+TASK_LOGGER = "rewards_tasks:"
+_TASK_TAG_RE = re.compile(r"\[(OK|SKIP|FAIL)\]\s")
+
 
 class RunState:
     def __init__(self):
@@ -301,6 +308,8 @@ def get_diagnostics() -> Dict[str, Any]:
     account_entries = 0
     tasks_ok_recent = 0
     tasks_seen_recent = 0
+    not_signed_in_recent = 0
+    notice_examples: List[str] = []
     accounts_seen: List[str] = []
     for r in recent:
         stats = r.get("stats", {}) or {}
@@ -311,6 +320,11 @@ def get_diagnostics() -> Dict[str, Any]:
             if not isinstance(st, dict):
                 continue
             account_entries += 1
+            if st.get("not_signed_in"):
+                not_signed_in_recent += 1
+            for notice in (st.get("notices") or []):
+                if len(notice_examples) < 4 and str(notice) not in notice_examples:
+                    notice_examples.append(str(notice))
             try:
                 gained += int(st.get("points_gained", 0) or 0)
             except (TypeError, ValueError):
@@ -344,6 +358,13 @@ def get_diagnostics() -> Dict[str, Any]:
             empty_runs += 1
 
     suggestions: List[str] = []
+    if not_signed_in_recent:
+        suggestions.append(
+            f"Upstream reported the browser was NOT signed in on {not_signed_in_recent} recent "
+            "account-run(s). The cookie check can pass while the profile the automation opens "
+            "is signed out; re-run Interactive Login for the account and make sure no other "
+            "Edge window is using the profile."
+        )
     if recent and tasks_seen_recent and tasks_ok_recent == 0:
         suggestions.append(
             "No task reported [OK] in any recent run. If you are signed in on "
@@ -393,6 +414,8 @@ def get_diagnostics() -> Dict[str, Any]:
         "empty_runs_recent": empty_runs,
         "tasks_ok_recent": tasks_ok_recent,
         "tasks_seen_recent": tasks_seen_recent,
+        "not_signed_in_recent": not_signed_in_recent,
+        "notices": notice_examples,
         "explore_examples": explore_warn_examples,
         "misc_examples": misc_warn_examples,
         "suggestions": suggestions,
@@ -462,6 +485,14 @@ def init_account_stat_entry(name: str) -> Dict[str, Any]:
         # left behind. Kept as a plain list of short strings for the API/UI.
         "warnings": [],
         "incomplete_cards": 0,
+        # Upstream detected that the browser profile is not signed in. This is
+        # the failure mode that looks like "every task skipped" and is worth
+        # surfacing distinctly from a selector miss.
+        "not_signed_in": False,
+        # Other upstream WARNING/ERROR lines (quota not filled, bonus button
+        # missing, a round that earned nothing, ...) for display without
+        # turning on DEBUG.
+        "notices": [],
         "current_step": "Initializing browser...",
         "step_index": 0,
         "total_steps": 6,
@@ -573,14 +604,58 @@ def parse_log_line(line: str):
         # "OK with issues". Recalc to keep points honest (search diff only).
         _recalc_points(acc_entry)
 
-    # Task tags: [OK], [SKIP], [FAIL]
-    for tag in ["[OK]", "[SKIP]", "[FAIL]"]:
-        if tag in line:
-            clean_tag = tag[1:-1]
-            for task_name in TASK_NAMES:
-                if task_name.lower() in line.lower():
-                    acc_entry["tasks"][task_name] = clean_tag
+    # Task tags: [OK], [SKIP], [FAIL]. Known task names match by substring, so
+    # a line that carries extra words still resolves. Any other name is only
+    # taken from the rewards_tasks logger, so the browser logger's
+    # "[FAIL] default: could not start Edge" is not mistaken for a task. This
+    # keeps the dashboard correct if upstream adds or renames a task.
+    tag_hit = _TASK_TAG_RE.search(line)
+    if tag_hit:
+        tag = tag_hit.group(1)
+        matched_known = False
+        for task_name in TASK_NAMES:
+            if task_name.lower() in line.lower():
+                acc_entry["tasks"][task_name] = tag
+                matched_known = True
+        if TASK_LOGGER in line:
+            name_match = re.search(r"\[(?:OK|SKIP|FAIL)\]\s+([^:]+?)(?::|$)", line)
+            if name_match:
+                name = name_match.group(1).strip()
+                if name and name not in TASK_NAMES:
+                    acc_entry["tasks"][name] = tag
+        if matched_known or TASK_LOGGER in line:
+            # Grow the step total if upstream ships more tasks than we expect.
+            acc_entry["total_steps"] = max(
+                int(acc_entry.get("total_steps") or len(TASK_NAMES)), len(acc_entry["tasks"])
+            )
             _recalc_points(acc_entry)
+
+    # Upstream warns when the profile is not signed in. Surface it.
+    if "NOT signed in on rewards.bing.com" in line:
+        acc_entry["not_signed_in"] = True
+
+    # Capture other upstream warnings (quota not filled, missing bonus button,
+    # a search round that earned nothing, ...) for display without DEBUG.
+    if (
+        TASK_LOGGER in line
+        and ("WARNING" in line or "ERROR" in line)
+        and "is not complete after" not in line
+        and not _TASK_TAG_RE.search(line)
+    ):
+        notice = line.split(TASK_LOGGER, 1)[-1].strip()[:200]
+        notices = acc_entry.setdefault("notices", [])
+        if notice and notice not in notices:
+            notices.append(notice)
+            del notices[:-10]
+
+    # The browser logger reports an account that failed to start (profile
+    # locked, driver/Edge problem). Surface it rather than only in the log.
+    if "browser:" in line and "[FAIL]" in line:
+        notice = "browser " + line.split("browser:", 1)[-1].strip()[:190]
+        notices = acc_entry.setdefault("notices", [])
+        if notice not in notices:
+            notices.append(notice)
+            del notices[:-10]
 
     # Step progress tracking based on completed tasks. Advance on any terminal
     # tag ([OK]/[SKIP]/[FAIL]) so a failed task doesn't stall the banner.

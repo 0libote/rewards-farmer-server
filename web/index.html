@@ -629,6 +629,7 @@
         const rows = [
           ['Runs analyzed', `${d.recent_runs_analyzed} recent / ${d.total_runs_analyzed} total`],
           ['Tasks OK', `${d.tasks_ok_recent ?? 0}/${d.tasks_seen_recent ?? 0} recent`],
+          ['Not signed in', `${d.not_signed_in_recent ?? 0} recent`],
           ['Visual SKIP', `${d.visual_skip_recent}/${d.recent_runs_analyzed} recent runs`],
           ['Explore OK with cards missed', `${d.explore_ok_with_issues_recent}/${d.recent_runs_analyzed} recent runs`],
           ['Empty (0-pt) runs', `${d.empty_runs_recent}/${d.recent_runs_analyzed} recent runs`],
@@ -644,6 +645,10 @@
         if (d.misc_examples && d.misc_examples.length) {
           html += `<div class="text-[11px] text-zinc-400 mb-1 font-semibold">Misc cards missed recently:</div><ul class="list-disc ml-5 mb-2 text-[11px] text-amber-200/80">` +
             d.misc_examples.map(e => `<li>${escapeHtml(e)}</li>`).join('') + `</ul>`;
+        }
+        if (d.notices && d.notices.length) {
+          html += `<div class="text-[11px] text-zinc-400 mb-1 font-semibold">Upstream warnings:</div><ul class="list-disc ml-5 mb-2 text-[11px] text-zinc-300/80">` +
+            d.notices.map(e => `<li>${escapeHtml(e)}</li>`).join('') + `</ul>`;
         }
         if (d.suggestions && d.suggestions.length) {
           html += `<div class="text-[11px] text-zinc-400 mb-1 font-semibold">Next steps:</div><ul class="space-y-1">` +
@@ -894,6 +899,14 @@
               </div>
             ` : ''}
 
+            <!-- Upstream said the browser profile was signed out -->
+            ${stats.not_signed_in ? `
+              <div class="p-2 bg-rose-500/10 border border-rose-500/30 rounded-lg text-xs text-rose-300 flex items-center space-x-1.5">
+                <i data-lucide="shield-alert" class="w-3.5 h-3.5 shrink-0"></i>
+                <span>Upstream reported the browser was <strong>not signed in</strong> on the last run. Re-run Interactive Login.</span>
+              </div>
+            ` : ''}
+
             <!-- Live task activity if running -->
             ${isCurrentRunning && stats.current_step ? `
               <div class="p-2 bg-emerald-950/40 border border-emerald-500/30 rounded-lg text-xs text-emerald-300 flex items-center space-x-2">
@@ -914,6 +927,13 @@
               </div>
             ` : ''}
 
+            <!-- Other upstream warnings worth seeing without DEBUG -->
+            ${(stats.notices && stats.notices.length) ? `
+              <div class="p-2 bg-zinc-800/60 border border-zinc-700 rounded-lg text-[11px] text-zinc-400 space-y-0.5">
+                ${stats.notices.slice(0, 3).map(n => `<div class="truncate" title="${escapeHtml(n)}">• ${escapeHtml(n)}</div>`).join('')}
+              </div>
+            ` : ''}
+
             <!-- Points & Task Pills -->
             <div class="pt-2 border-t border-zinc-900 grid grid-cols-2 gap-2 text-xs">
               <div class="bg-zinc-900/80 p-2 rounded-lg border border-zinc-800">
@@ -926,7 +946,7 @@
               <div class="bg-zinc-900/80 p-2 rounded-lg border border-zinc-800 flex items-center justify-between">
                 <div>
                   <span class="text-zinc-500 text-[10px] block uppercase font-medium">Tasks Progress</span>
-                  <span class="text-[10px] text-zinc-400">${countCompletedTasks(tasks)} / 6 OK${incomplete > 0 ? ` • ${incomplete} ⚠` : ''}</span>
+                  <span class="text-[10px] text-zinc-400">${countCompletedTasks(tasks)} / ${Object.keys(tasks).length} OK${incomplete > 0 ? ` • ${incomplete} ⚠` : ''}</span>
                 </div>
                 <div class="flex space-x-1">
                   ${renderTaskBadges(tasks, incomplete)}
@@ -951,7 +971,10 @@
     }
 
     function renderTaskBadges(tasks, incomplete = 0) {
-      const taskKeys = ["Bing daily set", "Explore on Bing", "Visual search", "Misc cards", "Required searches", "Bonus points"];
+      const preferred = ["Bing daily set", "Explore on Bing", "Visual search", "Misc cards", "Required searches", "Bonus points"];
+      // Render the expected tasks first, then any task upstream emits that is
+      // not in that list, so the dashboard does not go stale on a rename.
+      const taskKeys = [...preferred.filter(k => k in tasks), ...Object.keys(tasks).filter(k => !preferred.includes(k))];
       return taskKeys.map(k => {
         const val = tasks[k];
         let color = "bg-zinc-800 text-zinc-600";
