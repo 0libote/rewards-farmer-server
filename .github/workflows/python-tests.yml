@@ -7,6 +7,30 @@ on:
   workflow_dispatch:
 
 jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        # Pinned to full SHA (oven-sh/setup-bun v2 as of 2026-03-14).
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Build dashboard assets
+        run: bun run build
+
+      - name: Verify served assets resolve
+        run: |
+          test -s web/static/app.css
+          test -s web/static/vendor/lucide-0.544.0.min.js
+          grep -q 'href="/static/app.css"' web/index.html
+
   pytest:
     runs-on: ubuntu-latest
     steps:
@@ -17,6 +41,19 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Set up Bun
+        # Pinned to full SHA (oven-sh/setup-bun v2 as of 2026-03-14).
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: "1.4.2"
+
+      - name: Build dashboard assets
+        # test_vendor_assets_are_served_locally asserts the built bundles
+        # resolve locally; outputs are gitignored build artifacts.
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          bun run build
 
       - name: Install dependencies
         run: |
