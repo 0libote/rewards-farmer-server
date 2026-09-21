@@ -259,6 +259,33 @@ def test_history_write_is_atomic(tmp_path, monkeypatch):
     assert len(runner.get_history()) == 1
 
 
+def test_parse_ignores_implausible_raw_points():
+    _fresh()
+    parse_log_line("=== account: default ===")
+    parse_log_line("[POINTS] Raw points earned this run: +8972 pts")
+    assert state.account_stats["default"]["raw_points_earned"] is None
+    assert state.account_stats["default"]["points_gained"] == 0
+
+
+def test_parse_accepts_plausible_raw_points():
+    _fresh()
+    parse_log_line("=== account: default ===")
+    parse_log_line("[POINTS] Raw points earned this run: +105 pts")
+    assert state.account_stats["default"]["raw_points_earned"] == 105
+
+
+def test_history_sanitizes_implausible_points(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "HISTORY_FILE", tmp_path / "history.json")
+    runner.save_history_entry(
+        {"exit_code": 0, "stats": {"default": {"points_gained": 8972, "raw_points_earned": 8972}}}
+    )
+    entry = runner.get_history()[0]
+    assert entry["stats"]["default"]["points_gained"] == 0
+    assert entry["stats"]["default"]["raw_points_earned"] is None
+    assert runner.get_lifetime_stats()["total_points_gained"] == 0
+
+
 def test_llm_env_local_provider():
     cfg = AppConfig(
         query_source="llm",

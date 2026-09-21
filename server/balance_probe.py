@@ -6,6 +6,11 @@ upstream project, and so the DOM heuristics have one obvious home.
 import re
 import time
 
+# A real daily run earns at most a few hundred points. Anything larger is a
+# misread (for example "up to 15,000 points" on a promo), so values above this
+# are treated as unknown rather than recorded.
+MAX_PLAUSIBLE_RUN_GAIN = 1000
+
 
 def on_rewards_page(driver) -> bool:
     """True only when the browser is actually on the Rewards dashboard.
@@ -31,13 +36,28 @@ def extract_account_balance(driver, attempts: int = 3) -> int | None:
         return None
 
     js_candidates = [
-        # 1. aria-labels / titles like "Available points 4,491". Most specific,
-        # so it runs before anything that matches a bare number.
-        """
+        # 1. The number labelled "Available points" on the dashboard. On the
+        # Earn/other pages that label is absent, so this correctly finds
+        # nothing rather than grabbing a promo like "up to 15,000 points".
+        r"""
         try {
-            let els = document.querySelectorAll('[aria-label*="point" i], [title*="point" i]');
+            let txt = document.body ? (document.body.innerText || '') : '';
+            let m = txt.match(/available\s*points[\s\S]{0,24}?([0-9][0-9,]{1,})/i)
+                 || txt.match(/([0-9][0-9,]{1,})[\s\S]{0,24}?available\s*points/i);
+            if (m) {
+                let val = parseInt(m[1].replace(/,/g, ''), 10);
+                if (val >= 0 && val < 5000000) return val;
+            }
+        } catch(e) {}
+        return null;
+        """,
+        # 2. aria-labels / titles that name the balance specifically.
+        r"""
+        try {
+            let els = document.querySelectorAll('[aria-label], [title]');
             for (let el of els) {
-                let txt = ((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || '') + ' ' + (el.innerText || '')).trim();
+                let txt = ((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || '')).trim();
+                if (!/available|balance|total|your\s*points/i.test(txt)) continue;
                 let m = txt.match(/([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)/);
                 if (m) {
                     let val = parseInt(m[1].replace(/,/g, ''), 10);
@@ -47,31 +67,16 @@ def extract_account_balance(driver, attempts: int = 3) -> int | None:
         } catch(e) {}
         return null;
         """,
-        # 2. Explicit "N points" in rendered text, but only when the number is
-        # comma-grouped (a real balance, not a promo like "earn 40 points") or
-        # labelled available/total/your/rewards.
-        """
+        # 3. Plus/streak/bonus widgets show "N points" prominently and sit
+        # before the balance in the DOM on some variants. Only accept a
+        # comma-grouped number here so small promos are ignored.
+        r"""
         try {
             let txt = document.body ? (document.body.innerText || '') : '';
-            let m = txt.match(/(?:available|total|your|rewards)\\s*points[:\\s]*([0-9,]+)/i)
-                 || txt.match(/([0-9]{1,3}(?:,[0-9]{3})+)\\s*points/i);
+            let m = txt.match(/([0-9]{1,3}(?:,[0-9]{3})+)\s*points/i);
             if (m) {
                 let val = parseInt(m[1].replace(/,/g, ''), 10);
                 if (val >= 0 && val < 5000000) return val;
-            }
-        } catch(e) {}
-        return null;
-        """,
-        # 3. Last resort: a bare number in a points/balance element. Kept last
-        # because it can match a streak badge or promo number.
-        """
-        try {
-            for (let el of document.querySelectorAll('header *, [class*="points"], [id*="points"], [class*="balance"]')) {
-                let txt = (el.innerText || el.textContent || '').trim();
-                if (/^[0-9]{1,3}(,[0-9]{3})*$/.test(txt)) {
-                    let val = parseInt(txt.replace(/,/g, ''), 10);
-                    if (val >= 0 && val < 5000000) return val;
-                }
             }
         } catch(e) {}
         return null;

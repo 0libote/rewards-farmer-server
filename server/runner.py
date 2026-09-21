@@ -17,6 +17,7 @@ from server.config import (
 )
 from server.upstream_manager import ensure_upstream
 from server.account_checker import check_account_login
+from server.balance_probe import MAX_PLAUSIBLE_RUN_GAIN
 
 LOGS_DIR = DATA_DIR / "logs"
 HISTORY_FILE = LOGS_DIR / "history.json"
@@ -97,9 +98,35 @@ def get_history() -> List[Dict[str, Any]]:
         return []
     try:
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            history = json.load(f)
     except Exception:
         return []
+    if not isinstance(history, list):
+        return []
+    return [_sanitize_history_entry(e) for e in history if isinstance(e, dict)]
+
+
+def _sanitize_history_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop implausible point values so a bad read can't inflate the totals.
+
+    Older versions could record a promo number (e.g. "+8972") as points earned;
+    clamp anything outside the plausible daily range instead of trusting it.
+    """
+    for st in (entry.get("stats") or {}).values():
+        if not isinstance(st, dict):
+            continue
+        for key in ("points_gained", "raw_points_earned"):
+            value = st.get(key)
+            if value is None:
+                continue
+            try:
+                iv = int(value)
+            except (TypeError, ValueError):
+                st[key] = 0 if key == "points_gained" else None
+                continue
+            if iv < 0 or iv > MAX_PLAUSIBLE_RUN_GAIN:
+                st[key] = 0 if key == "points_gained" else None
+    return entry
 
 
 def get_log_content(filename: str) -> Optional[str]:
@@ -519,8 +546,9 @@ def parse_log_line(line: str):
     raw_pts_match = re.search(r"\[POINTS\] Raw points earned this run:\s*\+(\d+)\s*pts", line)
     if raw_pts_match:
         raw_val = int(raw_pts_match.group(1))
-        acc_entry["raw_points_earned"] = raw_val
-        acc_entry["points_gained"] = raw_val
+        if raw_val <= MAX_PLAUSIBLE_RUN_GAIN:
+            acc_entry["raw_points_earned"] = raw_val
+            acc_entry["points_gained"] = raw_val
 
     # Card-level misses inside an otherwise [OK] task. These are the "not
     # hitting the correct spots" lines, e.g.:

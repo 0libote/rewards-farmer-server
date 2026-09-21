@@ -21,7 +21,7 @@ if UPSTREAM_SRC.exists():
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from balance_probe import extract_account_balance
+from balance_probe import extract_account_balance, MAX_PLAUSIBLE_RUN_GAIN
 
 try:
     import rewards_tasks
@@ -87,6 +87,9 @@ if _original_complete_all is None:
 original_complete_all = _original_complete_all
 
 
+# A real daily run earns at most a few hundred points. Anything larger is a
+# misread (for example "up to 15,000 points" on a promo), so it is not reported
+# as raw earnings. Constant lives in balance_probe so the parser and stats agree.
 def _report_balance(label: str, value: int | None) -> None:
     if value is not None:
         print(f"[POINTS] Balance {label}: {value} pts", flush=True)
@@ -129,23 +132,29 @@ def instrumented_complete_all(self):
             if not hasattr(self, "switch_to_earn_page"):
                 print("[POINTS] Skipping balance-after check: upstream helper not found.", flush=True)
             else:
+                # Read the balance from the dashboard, which is where the
+                # "Available points" label lives. Other pages carry promo
+                # numbers ("up to 15,000 points") that the probe could mistake
+                # for the balance.
                 try:
-                    self.switch_to_earn_page()
+                    self.driver.get("https://rewards.bing.com/dashboard")
+                    time.sleep(2)
                 except Exception:
-                    # Earn tab click can go stale after the last task; reload
-                    # is an equivalent clean state for reading the header.
-                    try:
-                        self.driver.get("https://rewards.bing.com/")
-                        time.sleep(2)
-                    except Exception:
-                        pass
+                    pass
                 time.sleep(3)
                 balance_after = extract_account_balance(self.driver)
                 if balance_after is not None:
                     print(f"[POINTS] Balance after run: {balance_after} pts", flush=True)
                     if balance_before is not None:
-                        gained = max(0, balance_after - balance_before)
-                        print(f"[POINTS] Raw points earned this run: +{gained} pts", flush=True)
+                        gained = balance_after - balance_before
+                        if gained < 0 or gained > MAX_PLAUSIBLE_RUN_GAIN:
+                            print(
+                                f"[POINTS] Raw points earned this run: unknown "
+                                f"(implausible balance delta {gained})",
+                                flush=True,
+                            )
+                        else:
+                            print(f"[POINTS] Raw points earned this run: +{gained} pts", flush=True)
                     else:
                         print("[POINTS] Raw points earned this run: unknown (no before-balance)", flush=True)
                 else:

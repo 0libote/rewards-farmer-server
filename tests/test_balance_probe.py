@@ -65,3 +65,27 @@ def test_body_text_fallback_used_when_dom_probe_fails():
 def test_out_of_range_value_ignored():
     driver = FakeDriver("https://rewards.bing.com/", script_result=999999999)
     assert extract_account_balance(driver, attempts=1) is None
+
+
+class ConditionalDriver:
+    """Returns different values depending on which candidate ran."""
+
+    def __init__(self, url):
+        self.current_url = url
+        self.calls = []
+
+    def execute_script(self, code):
+        self.calls.append(code)
+        # Simulate a dashboard that also renders a promo "15,000 points":
+        # only the "available points" candidate should win.
+        if "available" in code.lower():
+            return 6028
+        return 15000
+
+    def find_element(self, by, value):
+        return _El("")
+
+
+def test_available_points_candidate_wins_over_promo():
+    driver = ConditionalDriver("https://rewards.bing.com/dashboard")
+    assert extract_account_balance(driver) == 6028
