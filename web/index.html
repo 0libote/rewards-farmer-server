@@ -5,33 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Rewards Farmer Server</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌾</text></svg>">
-  <script src="/static/vendor/tailwind-3.4.17.js"></script>
+  <link rel="stylesheet" href="/static/app.css">
+  <!-- Lucide icons UMD bundle (built from pinned npm dep via `bun run build`) -->
   <script src="/static/vendor/lucide-0.544.0.min.js"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          colors: {
-            brand: {
-              50: '#ecfdf5',
-              500: '#10b981',
-              600: '#059669',
-              700: '#047857',
-            }
-          }
-        }
-      }
-    }
-  </script>
-  <style>
-    /* Custom scrollbars */
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: #18181b; }
-    ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: #52525b; }
-    .terminal-font { font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', Courier, monospace; }
-  </style>
 </head>
 <body class="bg-zinc-950 text-zinc-100 min-h-screen flex flex-col">
 

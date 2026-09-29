@@ -1,0 +1,15 @@
+{
+  "name": "rewards-farmer-server-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Frontend asset pipeline (Tailwind CSS + Lucide) for the Rewards Farmer Server dashboard. Built with Bun, served offline by FastAPI.",
+  "scripts": {
+    "build": "bun scripts/build.ts"
+  },
+  "dependencies": {
+    "lucide": "0.544.0"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.17"
+  }
+}

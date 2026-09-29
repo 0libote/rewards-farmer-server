@@ -98,6 +98,16 @@ def test_vendor_assets_are_served_locally(client):
     r = client.get("/static/vendor/lucide-0.544.0.min.js")
     assert r.status_code == 200
     assert len(r.content) > 1000
+    # Precompiled Tailwind bundle (built via `bun run build`, no CDN at runtime).
+    css = client.get("/static/app.css")
+    assert css.status_code == 200
+    assert "text/css" in css.headers["content-type"]
+    assert len(css.content) > 1000
+    # The dashboard shell references the local bundles, not a CDN.
+    index = client.get("/")
+    assert index.status_code == 200
+    assert 'href="/static/app.css"' in index.text
+    assert "cdn.tailwindcss.com" not in index.text
 
 
 def test_log_endpoint_rejects_traversal(client):

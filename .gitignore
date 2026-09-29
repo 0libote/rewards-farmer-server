@@ -15,3 +15,13 @@ upstream/
 .vscode/
 .idea/
 *.log
+
+# Bun / Node (frontend asset pipeline)
+node_modules/
+bun.lockb
+
+# Built dashboard assets (regenerated via `bun install && bun run build`;
+# the Dockerfile builds them automatically)
+web/static/app.css
+web/static/vendor/*.js
+!web/static/vendor/.gitkeep
